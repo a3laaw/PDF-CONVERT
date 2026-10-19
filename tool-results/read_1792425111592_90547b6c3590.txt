@@ -1,0 +1,563 @@
+    50→  5265→
+    51→  5266→def _kind_of(name: str) -> str:
+    52→  5267→    return KIND_BY_EXT.get(Path(name or "x").suffix.lower(), "other")
+    53→  5268→
+    54→  5269→
+    55→  5270→def _save_upload(f: UploadFile, dest_dir: Path) -> Path:
+    56→  5271→    dest = dest_dir / (f.filename or "file")
+    57→  5272→    dest.parent.mkdir(parents=True, exist_ok=True)
+    58→  5273→    with open(dest, "wb") as fh:
+    59→  5274→        while chunk := f.file.read(1 << 20):
+    60→  5275→            fh.write(chunk)
+    61→  5276→    return dest
+    62→  5277→
+    63→  5278→
+    64→  5279→# ---------------------------------------------------------------------------
+    65→  5280→# المسارات
+    66→  5281→# ---------------------------------------------------------------------------
+    67→  5282→
+    68→  5283→
+    69→  5284→@app.get("/api/health")
+    70→  5285→def health():
+    71→  5286→    ocr_ok = True
+    72→  5287→    try:
+    73→  5288→        import pytesseract  # noqa
+    74→  5289→        import shutil
+    75→  5290→        ocr_ok = bool(shutil.which("tesseract"))
+    76→  5291→    except Exception:
+    77→  5292→        ocr_ok = False
+    78→  5293→    return {
+    79→  5294→        "ok": True,
+    80→  5295→        "platform": "vercel-serverless",
+    81→  5296→        "ocr_available": ocr_ok,
+    82→  5297→        "cad_dxf": True,
+    83→  5298→        "cad_dwg": cad_engine._find_oda_converter() is not None,
+    84→  5299→        "cad_rvt_aps": bool(__import__("os").environ.get("APS_CLIENT_ID")),
+    85→  5300→    }
+    86→  5301→
+    87→  5302→
+    88→  5303→@app.post("/api/inspect")
+    89→  5304→async def inspect(files: list[UploadFile] = File(...)):
+    90→  5305→    """فحص الملفات: نوع، صفحات، هل سكان — بدون تخزين دائم (/tmp مؤقت)."""
+    91→  5306→    with tempfile.TemporaryDirectory() as td:
+    92→  5307→        out = []
+    93→  5308→        for f in files:
+    94→  5309→            p = _save_upload(f, Path(td))
+    95→  5310→            kind = _kind_of(p.name)
+    96→  5311→            rec: dict[str, Any] = {"name": f.filename, "kind": kind, "size": p.stat().st_size, "scanned": False}
+    97→  5312→            if kind == "pdf":
+    98→  5313→                try:
+    99→  5314→                    rec["pages"] = engine.pdf_page_count(str(p))
+   100→  5315→                    rec["scanned"] = bool(engine.pdf_is_scanned(str(p))["scanned"])
+   101→  5316→                except Exception:
+   102→  5317→                    rec["pages"] = None
+   103→  5318→            out.append(rec)
+   104→  5319→        return {"files": out, "recipes": suggest_recipes([r["kind"] if not r.get("scanned") else "pdf_scanned" for r in out])}
+   105→  5320→
+   106→  5321→
+   107→  5322→@app.post("/api/interpret")
+   108→  5323→async def api_interpret(payload: dict[str, Any]):
+   109→  5324→    """أمر طبيعي → خط أنابيب (بدون ملفات — يكفي الأنواع)."""
+   110→  5325→    text = payload.get("text", "")
+   111→  5326→    kinds = payload.get("kinds", [])  # ["pdf","pdf","dxf"]
+   112→  5327→    file_ids = [f"f{i}" for i in range(len(kinds))]
+   113→  5328→    kind_map = dict(zip(file_ids, kinds))
+   114→  5329→    result = interpret(text, file_ids, kind_map, mode=payload.get("mode", "auto"))
+   115→  5330→    return {**result, "recipes": suggest_recipes(kinds)}
+   116→  5331→
+   117→  5332→
+   118→  5333→@app.post("/api/run")
+   119→  5334→async def run(
+   120→  5335→    files: list[UploadFile] = File(...),
+   121→  5336→    steps: str = Form(...),
+   122→  5337→    ref_names: str = Form(""),
+   123→  5338→):
+   124→  5339→    """
+   125→  5340→    تنفيذ خط أنابيب كامل في طلب واحد (بدون حالة).
+   126→  5341→    steps: [{"op":"compress","inputs":["@f0"],"params":{}}]
+   127→  5342→      مراجع المدخلات: @f0/@f1 = ترتيب الملفات المرفوعة | @prev = مخرج السابق
+   128→  5343→      | @all_pdfs / @all_images / @all_cad
+   129→  5344→    النتيجة: ZIP يحتوي كل الملفات الناتجة + manifest.json
+   130→  5345→    """
+   131→  5346→    try:
+   132→  5347→        step_list = json.loads(steps)
+   133→  5348→    except Exception:
+   134→  5349→        raise HTTPException(400, "steps غير صالح")
+   135→  5350→
+   136→  5351→    with tempfile.TemporaryDirectory() as td:
+   137→  5352→        tdp = Path(td)
+   138→  5353→        in_dir, out_dir = tdp / "in", tdp / "out"
+   139→  5354→        in_dir.mkdir(); out_dir.mkdir()
+   140→  5355→
+   141→  5356→        uploaded: list[Path] = []
+   142→  5357→        for f in files:
+   143→  5358→            uploaded.append(_save_upload(f, in_dir))
+   144→  5359→
+   145→  5360→        def resolve(refs):
+   146→  5361→            paths = []
+   147→  5362→            for r in refs or []:
+   148→  5363→                if r == "@prev":
+   149→  5364→                    if not step_outputs:
+   150→  5365→                        raise HTTPException(400, "لا توجد خطوة سابقة")
+   151→  5366→                    paths.append(list(step_outputs.values())[-1])
+   152→  5367→                elif r.startswith("@f") and r[2:].isdigit():
+   153→  5368→                    idx = int(r[2:])
+   154→  5369→                    if idx >= len(uploaded):
+   155→  5370→                        raise HTTPException(400, f"مرجع ملف غير موجود: {r}")
+   156→  5371→                    paths.append(uploaded[idx])
+   157→  5372→                elif r == "@all_pdfs":
+   158→  5373→                    paths.extend(p for p in uploaded if p.suffix.lower() == ".pdf")
+   159→  5374→                elif r == "@all_images":
+   160→  5375→                    paths.extend(p for p in uploaded if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+   161→  5376→                elif r == "@all_cad":
+   162→  5377→                    paths.extend(p for p in uploaded if p.suffix.lower() in (".dxf", ".dwg", ".rvt"))
+   163→  5378→                elif r == "@all":
+   164→  5379→                    paths.extend(uploaded)
+   165→  5380→                else:
+   166→  5381→                    raise HTTPException(400, f"مرجع غير معروف: {r}")
+   167→  5382→            return paths
+   168→  5383→
+   169→  5384→        step_outputs: dict[str, Path] = {}
+   170→  5385→        results = []
+   171→  5386→        t0 = time.time()
+   172→  5387→
+   173→  5388→        for i, step in enumerate(step_list):
+   174→  5389→            op = step.get("op", "")
+   175→  5390→            params = step.get("params", {}) or {}
+   176→  5391→            paths = resolve(step.get("inputs") or ["@all"])
+   177→  5392→            if not paths:
+   178→  5393→                raise HTTPException(400, f"الخطوة {i+1}: لا توجد مدخلات")
+   179→  5394→            t1 = time.time()
+   180→  5395→            try:
+   181→  5396→                outs = run_op(op, paths, params, out_dir)
+   182→  5397→            except OpError as e:
+   183→  5398→                raise HTTPException(400, f"الخطوة {i+1} ({op}): {e}")
+   184→  5399→            except Exception as e:
+   185→  5400→                raise HTTPException(500, f"الخطوة {i+1} ({op}): {type(e).__name__}: {e}")
+   186→  5401→            step_outputs[f"step{i}"] = outs[-1]
+   187→  5402→            results.append({
+   188→  5403→                "step": i + 1, "op": op,
+   189→  5404→                "label": step.get("label", op),
+   190→  5405→                "duration": round(time.time() - t1, 2),
+   191→  5406→                "outputs": [{"name": o.name, "size": o.stat().st_size} for o in outs],
+   192→  5407→            })
+   193→  5408→
+   194→  5409→        # حزم كل المخرجات في ZIP
+   195→  5410→        buf = io.BytesIO()
+   196→  5411→        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+   197→  5412→            for o in sorted(out_dir.rglob("*")):
+   198→  5413→                if o.is_file():
+   199→  5414→                    z.write(o, o.relative_to(out_dir))
+   200→  5415→            z.writestr("manifest.json", json.dumps({
+   201→  5416→                "ok": True,
+   202→  5417→                "total_duration": round(time.time() - t0, 2),
+   203→  5418→                "results": results,
+   204→  5419→            }, ensure_ascii=False, indent=2))
+   205→  5420→        buf.seek(0)
+   206→  5421→        return Response(
+   207→  5422→            content=buf.read(),
+   208→  5423→            media_type="application/zip",
+   209→  5424→            headers={"Content-Disposition": "attachment; filename=pdf-station-results.zip"},
+   210→  5425→        )
+   211→  5426→
+   212→  5427→
+   213→  5428→@app.post("/api/thumb")
+   214→  5429→async def thumb(file: UploadFile = File(...), page: int = Form(1), dpi: int = Form(72)):
+   215→  5430→    """معاينة صفحة من ملف (PNG) — بدون تخزين."""
+   216→  5431→    with tempfile.TemporaryDirectory() as td:
+   217→  5432→        p = _save_upload(file, Path(td))
+   218→  5433→        out = Path(td) / "thumb.png"
+   219→  5434→        try:
+   220→  5435→            engine.pdf_render_page(str(p), max(1, page), str(out), dpi=max(36, min(dpi, 200)))
+   221→  5436→        except Exception as e:
+   222→  5437→            raise HTTPException(400, f"لا توجد معاينة: {e}")
+   223→  5438→        return Response(content=out.read_bytes(), media_type="image/png")
+   224→  5439→
+   225→  5440→
+   226→  5441→# Vercel يكتشف التطبيق ASGI تلقائياً من `app`
+   227→  5442→~~~~
+   228→  5443→
+   229→  5444→
+   230→  5445→## 📄 `public/index.html`
+   231→  5446→**واجهة Vercel — الملفات في المتصفح + ثيم فاتح** — (361 سطر)
+   232→  5447→
+   233→  5448→~~~~
+   234→  5449→<!DOCTYPE html>
+   235→  5450→<html lang="ar" dir="rtl">
+   236→  5451→<head>
+   237→  5452→<meta charset="UTF-8">
+   238→  5453→<meta name="viewport" content="width=device-width, initial-scale=1.0">
+   239→  5454→<title>محطّة PDF — أدوات PDF وCAD في مكان واحد</title>
+   240→  5455→<style>
+   241→  5456→:root{
+   242→  5457→  --bg:#F4F6FB; --card:#FFFFFF; --line:#E5E8F0; --line2:#D6DBE8;
+   243→  5458→  --ink:#1B2438; --ink2:#5B6684; --ink3:#8A93AC;
+   244→  5459→  --brand:#4F55E3; --brand-soft:#EEF0FE; --brand-line:#C8CCFA;
+   245→  5460→  --ok:#0E9F6E; --ok-soft:#E6F7F0; --warn:#B45309; --warn-soft:#FEF6E7; --err:#DC2626; --err-soft:#FDECEC;
+   246→  5461→  --r:14px; --shadow:0 1px 2px rgba(27,36,56,.05), 0 8px 24px rgba(27,36,56,.06);
+   247→  5462→}
+   248→  5463→*{box-sizing:border-box;margin:0;padding:0}
+   249→  5464→body{font-family:"Segoe UI","Noto Sans Arabic","Tajawal",Tahoma,system-ui,sans-serif;background:var(--bg);color:var(--ink);font-size:14.5px;line-height:1.6}
+   250→  5465→button{font-family:inherit}
+   251→  5466→.wrap{max-width:1360px;margin:0 auto;padding:20px 22px 34px}
+   252→  5467→.top{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+   253→  5468→.brand{display:flex;align-items:center;gap:11px}
+   254→  5469→.brand .logo{width:42px;height:42px;border-radius:12px;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:20px;box-shadow:0 6px 16px rgba(79,85,227,.28)}
+   255→  5470→.brand h1{font-size:1.18rem;font-weight:800}
+   256→  5471→.brand .tag{color:var(--ink2);font-size:.78rem}
+   257→  5472→.grow{flex:1}
+   258→  5473→.btn{border:1px solid var(--line2);background:var(--card);color:var(--ink);border-radius:11px;padding:9px 16px;font-size:.86rem;font-weight:700;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:7px}
+   259→  5474→.btn:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+   260→  5475→.btn-primary{background:var(--brand);color:#fff;border-color:var(--brand);box-shadow:0 6px 16px rgba(79,85,227,.22)}
+   261→  5476→.btn-primary:hover{background:#3F45D4;color:#fff;transform:translateY(-1px)}
+   262→  5477→.btn-primary:disabled{opacity:.55;transform:none;cursor:not-allowed}
+   263→  5478→.btn-sm{padding:7px 12px;font-size:.78rem;border-radius:9px}
+   264→  5479→.command{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:var(--shadow);margin-bottom:16px}
+   265→  5480→.command .row{display:flex;align-items:center;gap:10px}
+   266→  5481→.command .icon{width:40px;height:40px;border-radius:11px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;font-size:19px;flex:none}
+   267→  5482→.command input{flex:1;border:0;outline:0;font-size:1.02rem;font-family:inherit;color:var(--ink);background:transparent;padding:10px 4px}
+   268→  5483→.command input::placeholder{color:var(--ink3)}
+   269→  5484→.grid{display:grid;grid-template-columns:296px minmax(0,1fr) 312px;gap:15px;align-items:start}
+   270→  5485→.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+   271→  5486→.panel .head{display:flex;align-items:center;gap:9px;padding:13px 16px;border-bottom:1px solid var(--line);font-weight:800;font-size:.9rem}
+   272→  5487→.panel .head .stepno{width:24px;height:24px;border-radius:8px;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:.74rem;font-weight:900;flex:none}
+   273→  5488→.panel .head .meta{margin-right:auto;color:var(--ink3);font-size:.74rem;font-weight:600}
+   274→  5489→.panel .body{padding:14px}
+   275→  5490→.drop{border:2px dashed var(--brand-line);border-radius:12px;padding:20px 12px;text-align:center;cursor:pointer;background:var(--brand-soft);transition:.15s;margin-bottom:12px}
+   276→  5491→.drop:hover,.drop.over{border-color:var(--brand);background:#E4E7FD}
+   277→  5492→.drop .big{font-size:1.55rem;margin-bottom:5px}
+   278→  5493→.drop p{color:var(--ink2);font-size:.8rem;line-height:1.85}
+   279→  5494→.file{display:flex;gap:10px;align-items:center;padding:9px 10px;border:1px solid var(--line);border-radius:11px;margin-bottom:8px;background:#FCFDFF}
+   280→  5495→.file .th{width:42px;height:54px;border-radius:8px;background:#F0F2F9;border:1px solid var(--line);overflow:hidden;display:grid;place-items:center;flex:none;font-size:1.05rem}
+   281→  5496→.file .th img{width:100%;height:100%;object-fit:cover}
+   282→  5497→.file .nm{font-size:.8rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+   283→  5498→.tag{display:inline-block;padding:1.5px 8px;border-radius:999px;font-size:.65rem;font-weight:800;border:1px solid var(--line2);color:var(--ink2);background:#fff;margin:3px 0 0 3px}
+   284→  5499→.tag.brand{background:var(--brand-soft);color:var(--brand);border-color:var(--brand-line)}
+   285→  5500→.tag.ok{background:var(--ok-soft);color:var(--ok);border-color:#B7E4D0}
+   286→  5501→.tag.warn{background:var(--warn-soft);color:var(--warn);border-color:#F0D9A8}
+   287→  5502→.step{display:flex;gap:11px;align-items:flex-start;padding:12px 13px;border:1px solid var(--line);border-radius:12px;margin-bottom:9px;background:#FCFDFF}
+   288→  5503→.step .n{width:27px;height:27px;border-radius:9px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;font-weight:900;font-size:.8rem;flex:none;margin-top:1px}
+   289→  5504→.step .op{font-weight:800;font-size:.88rem;display:flex;align-items:center;gap:7px}
+   290→  5505→.step .params{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+   291→  5506→.step .params input,.step .params select{border:1px solid var(--line2);border-radius:9px;padding:6px 10px;font-size:.76rem;font-family:inherit;color:var(--ink);background:#fff;outline:0}
+   292→  5507→.step .params label{display:flex;flex-direction:column;gap:3px;font-size:.68rem;color:var(--ink3);font-weight:700}
+   293→  5508→.step .tools{display:flex;gap:4px;flex:none;margin-top:2px}
+   294→  5509→.step .tools button{width:25px;height:25px;border-radius:8px;border:1px solid var(--line);cursor:pointer;background:#fff;color:var(--ink3);font-size:.72rem}
+   295→  5510→.step .tools button:hover{color:var(--brand);border-color:var(--brand-line);background:var(--brand-soft)}
+   296→  5511→.arrow{width:2px;height:14px;background:var(--brand-line);margin:0 auto 9px;border-radius:2px}
+   297→  5512→.addstep{border:2px dashed var(--line2);border-radius:12px;padding:12px;text-align:center;color:var(--ink3);cursor:pointer;font-size:.84rem;font-weight:700;transition:.15s}
+   298→  5513→.addstep:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+   299→  5514→#opMenu{display:none;flex-wrap:wrap;gap:7px;margin-top:10px}
+   300→  5515→.recipe{padding:12px 13px;border:1px solid var(--line);border-radius:11px;margin-bottom:8px;cursor:pointer;transition:.15s;background:#FCFDFF}
+   301→  5516→.recipe:hover{border-color:var(--brand);background:var(--brand-soft);transform:translateY(-1px)}
+   302→  5517→.recipe .t{font-weight:800;font-size:.84rem}
+   303→  5518→.recipe .d{font-size:.73rem;color:var(--ink2);margin-top:3px}
+   304→  5519→.empty{color:var(--ink3);font-size:.81rem;text-align:center;padding:22px 10px;line-height:2.1}
+   305→  5520→.note{font-size:.78rem;color:var(--ink2);line-height:2.15;padding:4px 2px}
+   306→  5521→#toasts{position:fixed;bottom:20px;right:20px;z-index:90;display:flex;flex-direction:column;gap:9px}
+   307→  5522→.toast{padding:12px 16px;border-radius:12px;background:#fff;border:1px solid var(--line2);color:var(--ink);font-size:.83rem;box-shadow:0 12px 34px rgba(27,36,56,.14);max-width:370px;animation:in .25s ease}
+   308→  5523→.toast.ok{border-color:#B7E4D0;background:var(--ok-soft)}
+   309→  5524→.toast.err{border-color:#F3C1C1;background:var(--err-soft)}
+   310→  5525→@keyframes in{from{opacity:0;transform:translateY(12px)}to{opacity:1}}
+   311→  5526→.spin{width:16px;height:16px;border:3px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
+   312→  5527→@keyframes sp{to{transform:rotate(360deg)}}
+   313→  5528→</style>
+   314→  5529→</head>
+   315→  5530→<body>
+   316→  5531→<div class="wrap">
+   317→  5532→  <div class="top">
+   318→  5533→    <div class="brand">
+   319→  5534→      <div class="logo">⚡</div>
+   320→  5535→      <div><h1>محطّة PDF</h1><div class="tag">أدوات PDF وCAD في مكان واحد — ملفاتك تبقى في متصفحك</div></div>
+   321→  5536→    </div>
+   322→  5537→    <div class="grow"></div>
+   323→  5538→    <div class="btn" id="healthPill" style="cursor:default">… جارٍ التحقق</div>
+   324→  5539→  </div>
+   325→  5540→
+   326→  5541→  <div class="command">
+   327→  5542→    <div class="row">
+   328→  5543→      <div class="icon">🧠</div>
+   329→  5544→      <input id="cmd" placeholder="اكتب طلبك هنا… مثلاً: «ادمج الملفات ثم صغّر حجمها»" autocomplete="off">
+   330→  5545→      <button class="btn" onclick="doInterpret()">اقترح الخطوات ✦</button>
+   331→  5546→      <button class="btn btn-primary" onclick="doRun()">تنفيذ ⚡</button>
+   332→  5547→    </div>
+   333→  5548→  </div>
+   334→  5549→
+   335→  5550→  <div class="grid">
+   336→  5551→    <section class="panel">
+   337→  5552→      <div class="head"><span class="stepno">١</span> الملفات <span class="meta" id="fcount">لا توجد ملفات</span></div>
+   338→  5553→      <div class="body">
+   339→  5554→        <div class="drop" id="drop" onclick="document.getElementById('fi').click()">
+   340→  5555→          <div class="big">⬇️</div>
+   341→  5556→          <p><b>أفلت الملفات هنا</b><br><small>أو اضغط للاختيار — PDF · DXF · DWG · RVT · صور — تبقى في متصفحك</small></p>
+   342→  5557→        </div>
+   343→  5558→        <input type="file" id="fi" multiple hidden accept=".pdf,.dxf,.dwg,.rvt,.png,.jpg,.jpeg,.gif,.webp,.bmp">
+   344→  5559→        <div id="flist"></div>
+   345→  5560→      </div>
+   346→  5561→    </section>
+   347→  5562→
+   348→  5563→    <section class="panel">
+   349→  5564→      <div class="head">
+   350→  5565→        <span class="stepno">٢</span> الخطوات
+   351→  5566→        <span class="meta" id="scount">لا توجد خطوات</span>
+   352→  5567→        <button class="btn btn-sm" onclick="clearSteps()">🗑️ مسح الكل</button>
+   353→  5568→        <button class="btn btn-primary btn-sm" id="runBtn" onclick="doRun()">▶️ تنفيذ</button>
+   354→  5569→      </div>
+   355→  5570→      <div class="body">
+   356→  5571→        <div id="steps"></div>
+   357→  5572→        <div class="empty" id="emptyHint"><div style="font-size:1.9rem;margin-bottom:8px">🧩</div>ارفع ملفاتك ثم اكتب طلبك — أو أضف الخطوات بنفسك</div>
+   358→  5573→        <div class="addstep" onclick="toggleOps(event)">＋ إضافة خطوة جديدة</div>
+   359→  5574→        <div id="opMenu"></div>
+   360→  5575→      </div>
+   361→  5576→    </section>
+   362→  5577→
+   363→  5578→    <section class="panel">
+   364→  5579→      <div class="head"><span class="stepno">٣</span> مهام شائعة</div>
+   365→  5580→      <div class="body" id="recipes"><div class="empty">أضف ملفاتك لتظهر المهام المقترحة</div></div>
+   366→  5581→      <div class="head" style="border-top:1px solid var(--line)">ℹ️ ملاحظات</div>
+   367→  5582→      <div class="body">
+   368→  5583→        <div class="note">
+   369→  5584→          🔒 ملفاتك لا تُخزَّن على الخادم — تُعالَج ثم تُحمَّل مباشرة<br>
+   370→  5585→          ✍️ اكتب طلبك بالعربية وسيتحول تلقائيًا إلى خطوات جاهزة<br>
+   371→  5586→          📷 التعرّف الضوئي غير متاح في النسخة الأونلاين<br>
+   372→  5587→          🏗️ ملفات DXF تُحوَّل مباشرة — وDWG وRVT عند توفّر المحول
+   373→  5588→        </div>
+   374→  5589→      </div>
+   375→  5590→    </section>
+   376→  5591→  </div>
+   377→  5592→</div>
+   378→  5593→<div id="toasts"></div>
+   379→  5594→<script>
+   380→  5595→const $=s=>document.querySelector(s);
+   381→  5596→const OPS={
+   382→  5597→  merge:{icon:"🔗",label:"دمج الملفات",f:[]},
+   383→  5598→  compress:{icon:"🗜️",label:"تصغير حجم الملف",f:[{k:"level",t:[{v:"light",t:"خفيف"},{v:"medium",t:"متوسط"},{v:"strong",t:"قوي"}],d:"medium",l:"درجة الضغط"}]},
+   384→  5599→  extract_pages:{icon:"✂️",label:"استخراج صفحات",f:[{k:"pages",t:"text",d:"1-3",l:"أرقام الصفحات",p:"مثال: 1-3،5"}]},
+   385→  5600→  delete_pages:{icon:"🗑️",label:"حذف صفحات",f:[{k:"pages",t:"text",d:"2",l:"أرقام الصفحات",p:"مثال: 2"}]},
+   386→  5601→  rotate:{icon:"🔄",label:"تدوير الصفحات",f:[{k:"degrees",t:[{v:90,t:"90°"},{v:180,t:"180°"},{v:270,t:"270°"}],d:90,l:"الزاوية"}]},
+   387→  5602→  watermark:{icon:"💧",label:"علامة مائية",f:[{k:"text",t:"text",d:"سري",l:"نص العلامة"}]},
+   388→  5603→  page_numbers:{icon:"🔢",label:"ترقيم الصفحات",f:[]},
+   389→  5604→  encrypt:{icon:"🔐",label:"حماية بكلمة مرور",f:[{k:"password",t:"text",d:"1234",l:"كلمة المرور"}]},
+   390→  5605→  to_images:{icon:"🖼️",label:"تحويل إلى صور",f:[{k:"dpi",t:"text",d:"150",l:"دقة الصورة"}]},
+   391→  5606→  to_text:{icon:"📝",label:"استخراج النص",f:[]},
+   392→  5607→  to_word:{icon:"📘",label:"تحويل إلى Word",f:[]},
+   393→  5608→  flatten:{icon:"🪨",label:"تثبيت نهائي",f:[]},
+   394→  5609→  impose:{icon:"🗂️",label:"عدة صفحات في الورقة",f:[{k:"pages_per_sheet",t:[{v:2,t:"صفحتان"},{v:4,t:"4 صفحات"},{v:6,t:"6 صفحات"},{v:9,t:"9 صفحات"}],d:4,l:"في الورقة الواحدة"}]},
+   395→  5610→  booklet:{icon:"📖",label:"كتيّب للطباعة",f:[]},
+   396→  5611→  dxf_to_pdf:{icon:"🏗️",label:"تحويل DXF إلى PDF",f:[]},
+   397→  5612→  dwg_to_pdf:{icon:"🏗️",label:"تحويل DWG إلى PDF",f:[]},
+   398→  5613→  rvt_to_pdf:{icon:"🏛️",label:"تحويل RVT إلى PDF",f:[]},
+   399→  5614→};
+   400→  5615→let files=[];let steps=[];
+   401→  5616→function toast(m,c=""){const t=document.createElement("div");t.className="toast "+c;t.innerHTML=m;$("#toasts").appendChild(t);setTimeout(()=>t.remove(),4500)}
+   402→  5617→function fmt(n){return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"}
+   403→  5618→function nFiles(n){return n===0?"لا توجد ملفات":n===1?"ملف واحد":n===2?"ملفان":n<=10?n+" ملفات":n+" ملفًا"}
+   404→  5619→function nSteps(n){return n===0?"لا توجد خطوات":n===1?"خطوة واحدة":n===2?"خطوتان":n<=10?n+" خطوات":n+" خطوة"}
+   405→  5620→
+   406→  5621→function detailFor(status, detail){
+   407→  5622→  if(typeof detail==="string"&&detail)return detail;
+   408→  5623→  if(status===413)return "الملف كبير جداً لهذا الاتصال — الحد العملي نحو 4 ميجابايت";
+   409→  5624→  if(status===403)return "انتهت صلاحية الدخول — أعد فتح الصفحة";
+   410→  5625→  if(status>=500)return "الخادم غير جاهز حالياً — انتظر قليلاً وأعد المحاولة";
+   411→  5626→  return "حاول مرة أخرى";
+   412→  5627→}
+   413→  5628→function showConnBanner(){
+   414→  5629→  if($("#connBanner"))return;
+   415→  5630→  const b=document.createElement("div");
+   416→  5631→  b.id="connBanner";
+   417→  5632→  b.style.cssText="background:#FEF6E7;border:1px solid #F0D9A8;color:#B45309;border-radius:12px;padding:12px 16px;margin-bottom:14px;font-size:.85rem;line-height:2";
+   418→  5633→  b.innerHTML=`⚠️ <b>لا يوجد اتصال.</b> إذا كنت داخل «معاينة الملف» فهذه معاينة ثابتة بلا شبكة — افتح <b>المعاينة المباشرة</b> للموقع، أو تحقق من اتصالك بالإنترنت. <button class="btn btn-sm" onclick="checkConn()" style="margin-right:8px">🔄 إعادة المحاولة</button>`;
+   419→  5634→  const anchor=document.querySelector(".command");
+   420→  5635→  if(anchor)anchor.parentNode.insertBefore(b,anchor);
+   421→  5636→}
+   422→  5637→async function checkConn(){
+   423→  5638→  try{
+   424→  5639→    const r=await fetch("/api/health",{cache:"no-store"});
+   425→  5640→    const h=await r.json();
+   426→  5641→    $("#healthPill").innerHTML=`✅ جاهز للعمل · ${h.ocr_available?"التعرّف الضوئي مفعّل":"يعمل مباشرة في المتصفح"}`;
+   427→  5642→    const b=$("#connBanner");if(b)b.remove();
+   428→  5643→    return true;
+   429→  5644→  }catch(e){
+   430→  5645→    $("#healthPill").textContent="⚠️ غير متصل";
+   431→  5646→    showConnBanner();
+   432→  5647→    return false;
+   433→  5648→  }
+   434→  5649→}
+   435→  5650→function addFiles(fileList){
+   436→  5651→  const arr=[...fileList];if(!arr.length)return;
+   437→  5652→  const big=arr.find(f=>f.size>4.2*1024*1024);
+   438→  5653→  if(big)toast(`⚠️ «${big.name}» كبير (${fmt(big.size)}) — الحد للرفع نحو 4 ميجابايت في النسخة الأونلاين`,"err");
+   439→  5654→  toast("⏳ جارٍ فحص الملفات…");
+   440→  5655→  const fd=new FormData();arr.forEach(f=>fd.append("files",f));
+   441→  5656→  const xhr=new XMLHttpRequest();
+   442→  5657→  xhr.open("POST","/api/inspect");
+   443→  5658→  xhr.timeout=60000;
+   444→  5659→  xhr.onload=()=>{
+   445→  5660→    let data={};try{data=JSON.parse(xhr.responseText)}catch(e){}
+   446→  5661→    if(xhr.status>=200&&xhr.status<300&&data.files){
+   447→  5662→      data.files.forEach((meta,i)=>{
+   448→  5663→        files.push({file:arr[i],...meta,thumb:null});
+   449→  5664→        if(["pdf","dxf","dwg","rvt"].includes(meta.kind)) loadThumb(files.length-1);
+   450→  5665→      });
+   451→  5666→      renderFiles();
+   452→  5667→      if(data.recipes&&data.recipes.length) renderRecipes(data.recipes);
+   453→  5668→      toast("✅ تمت إضافة "+nFiles(arr.length),"ok");
+   454→  5669→    }else{
+   455→  5670→      toast(`❌ تعذّر الفحص (${xhr.status}) — ${detailFor(xhr.status,data.detail)}`,"err");
+   456→  5671→    }
+   457→  5672→  };
+   458→  5673→  xhr.onerror=()=>{
+   459→  5674→    showConnBanner();
+   460→  5675→    toast("❌ تعذّر الاتصال — تأكد أنك في «المعاينة المباشرة» (وليست معاينة الملف)","err");
+   461→  5676→  };
+   462→  5677→  xhr.ontimeout=()=>toast("❌ انتهى وقت الفحص — جرّب ملفات أصغر","err");
+   463→  5678→  xhr.send(fd);
+   464→  5679→}
+   465→  5680→async function loadThumb(i){
+   466→  5681→  const fd=new FormData();fd.append("file",files[i].file);fd.append("page","1");fd.append("dpi","72");
+   467→  5682→  try{const r=await fetch("/api/thumb",{method:"POST",body:fd});
+   468→  5683→    if(r.ok){files[i].thumb=URL.createObjectURL(await r.blob());renderFiles()}}catch(e){}
+   469→  5684→}
+   470→  5685→function renderFiles(){
+   471→  5686→  $("#fcount").textContent=nFiles(files.length);
+   472→  5687→  $("#flist").innerHTML=files.map((f,i)=>`
+   473→  5688→    <div class="file">
+   474→  5689→      <div class="th">${f.thumb?`<img src="${f.thumb}">`:"📄"}</div>
+   475→  5690→      <div style="min-width:0;flex:1">
+   476→  5691→        <div class="nm">${f.name}</div>
+   477→  5692→        <div>
+   478→  5693→          <span class="tag ${["dxf","dwg","rvt"].includes(f.kind)?"brand":""}">${(f.kind||"?").toUpperCase()}</span>
+   479→  5694→          ${f.pages?`<span class="tag ok">${f.pages} ${f.pages===1?"صفحة":"صفحات"}</span>`:""}
+   480→  5695→          ${f.scanned?`<span class="tag warn">📷 ممسوح</span>`:""}
+   481→  5696→        </div>
+   482→  5697→        <div style="font-size:.68rem;color:var(--ink3);margin-top:3px">${fmt(f.size||0)}</div>
+   483→  5698→      </div>
+   484→  5699→      <button class="btn btn-sm" style="padding:3px 8px;font-size:.68rem;flex:none" title="إزالة الملف" onclick="files.splice(${i},1);renderFiles()">✕</button>
+   485→  5700→    </div>`).join("");
+   486→  5701→}
+   487→  5702→function renderSteps(){
+   488→  5703→  $("#emptyHint").style.display=steps.length?"none":"block";
+   489→  5704→  $("#scount").textContent=nSteps(steps.length);
+   490→  5705→  $("#steps").innerHTML=steps.map((s,i)=>{
+   491→  5706→    const m=OPS[s.op]||{icon:"⚙️",label:s.op,f:[]};
+   492→  5707→    return `${i?'<div class="arrow"></div>':""}<div class="step">
+   493→  5708→      <div class="n">${i+1}</div>
+   494→  5709→      <div style="flex:1;min-width:0">
+   495→  5710→        <div class="op">${m.icon} ${m.label}</div>
+   496→  5711→        <div class="params">${(m.f||[]).map(fl=>{
+   497→  5712→          const cur=s.params[fl.k]??fl.d;
+   498→  5713→          return Array.isArray(fl.t)
+   499→  5714→          ?`<label>${fl.l}<select onchange="steps[${i}].params['${fl.k}']=isNaN(this.value)?this.value:+this.value">${fl.t.map(o=>{
+   500→  5715→            const v=o.v??o, txt=o.t??o;
+   501→  5716→            return `<option value="${v}" ${String(cur)===String(v)?"selected":""}>${txt}</option>`
+   502→  5717→          }).join("")}</select></label>`
+   503→  5718→          :`<label>${fl.l}<input placeholder="${fl.p||fl.l}" value="${cur??""}" onchange="steps[${i}].params['${fl.k}']=this.value"></label>`
+   504→  5719→        }).join("")}</div>
+   505→  5720→      </div>
+   506→  5721→      <div class="tools">
+   507→  5722→        <button title="نقل لأعلى" onclick="mv(${i},-1)">↑</button><button title="نقل لأسفل" onclick="mv(${i},1)">↓</button>
+   508→  5723→        <button title="حذف الخطوة" onclick="steps.splice(${i},1);renderSteps()">✕</button>
+   509→  5724→      </div>
+   510→  5725→    </div>`;
+   511→  5726→  }).join("");
+   512→  5727→}
+   513→  5728→function mv(i,d){const j=i+d;if(j<0||j>=steps.length)return;[steps[i],steps[j]]=[steps[j],steps[i]];renderSteps()}
+   514→  5729→function clearSteps(){steps=[];renderSteps()}
+   515→  5730→function toggleOps(e){
+   516→  5731→  e.stopPropagation();
+   517→  5732→  const m=$("#opMenu");
+   518→  5733→  if(m.style.display==="flex"){m.style.display="none";return}
+   519→  5734→  m.style.display="flex";
+   520→  5735→  m.innerHTML=Object.entries(OPS).map(([op,v])=>
+   521→  5736→    `<button class="btn btn-sm" onclick="addStep('${op}')">${v.icon} ${v.label}</button>`).join("");
+   522→  5737→}
+   523→  5738→document.addEventListener("click",()=>$("#opMenu").style.display="none");
+   524→  5739→function addStep(op){
+   525→  5740→  const m=OPS[op];const params={};(m.f||[]).forEach(f=>params[f.k]=f.d);
+   526→  5741→  const inputs=steps.length?["@prev"]:files.map((f,i)=>"@f"+i);
+   527→  5742→  steps.push({op,inputs:inputs.length?inputs:["@all"],params});
+   528→  5743→  $("#opMenu").style.display="none";renderSteps();
+   529→  5744→}
+   530→  5745→function renderRecipes(recipes){
+   531→  5746→  $("#recipes").innerHTML=recipes.map((r,i)=>`
+   532→  5747→    <div class="recipe" onclick="applyRecipe(${i})">
+   533→  5748→      <div class="t">${r.title}</div><div class="d">${r.desc||""}</div>
+   534→  5749→    </div>`).join("");
+   535→  5750→  window._recipes=recipes;
+   536→  5751→}
+   537→  5752→function applyRecipe(i){
+   538→  5753→  const r=(window._recipes||[])[i];if(!r)return;
+   539→  5754→  steps=(r.steps||[]).map(s=>({op:s.op,inputs:(s.inputs||["@all"]).map(x=>x.startsWith("@all")?"@all":x),params:{...(s.params||{})}}));
+   540→  5755→  renderSteps();toast("✨ تم إعداد الخطوات — اضغط «تنفيذ»","ok");
+   541→  5756→}
+   542→  5757→async function doInterpret(){
+   543→  5758→  const text=$("#cmd").value.trim();
+   544→  5759→  if(!text){toast("اكتب طلبك أولاً ✍️","err");return}
+   545→  5760→  if(!files.length){toast("أضف ملفاتك أولاً 📂","err");return}
+   546→  5761→  let r;
+   547→  5762→  try{
+   548→  5763→    r=await fetch("/api/interpret",{method:"POST",headers:{"Content-Type":"application/json"},
+   549→  5764→      body:JSON.stringify({text,kinds:files.map(f=>f.kind)})});
+   550→  5765→  }catch(e){
+   551→  5766→    showConnBanner();
+   552→  5767→    toast("❌ تعذّر الاتصال — استخدم المعاينة المباشرة","err");return;
+   553→  5768→  }
+   554→  5769→  const data=await r.json().catch(()=>({}));
+   555→  5770→  if(!r.ok){toast(`❌ (${r.status}) — ${detailFor(r.status,data.detail)}`,"err");return}
+   556→  5771→  if(!data.steps||!data.steps.length){toast("🤷 لم أفهم الطلب — جرّب مثلاً: «ادمج الملفات ثم صغّرها»","err");return}
+   557→  5772→  steps=data.steps.map(s=>({...s,inputs:(s.inputs||["@all"]).map(x=>x.startsWith("@all")?"@all":x)}));
+   558→  5773→  renderSteps();
+   559→  5774→  toast(`${data.engine==="ai"?"🤖 ذكاء اصطناعي":"🧠"} · ${data.explanation||"تم"}`,"ok");
+   560→  5775→}
+   561→  5776→async function doRun(){
+   562→  5777→  if(!files.length){toast("أضف ملفاتك أولاً 📂","err");return}
+   563→  5778→  if(!steps.length){toast("أضف خطوة واحدة على الأقل ⚙️","err");return}
+   564→  5779→  const btn=$("#runBtn");btn.disabled=true;btn.innerHTML=`<span class="spin"></span> جارٍ التنفيذ…`;
+   565→  5780→  try{
+   566→  5781→    const fd=new FormData();
+   567→  5782→    files.forEach(f=>fd.append("files",f.file));
+   568→  5783→    fd.append("steps",JSON.stringify(steps));
+   569→  5784→    let r;
+   570→  5785→    try{
+   571→  5786→      r=await fetch("/api/run",{method:"POST",body:fd});
+   572→  5787→    }catch(e){
+   573→  5788→      showConnBanner();
+   574→  5789→      throw new Error("تعذّر الاتصال — استخدم المعاينة المباشرة (وليست معاينة الملف)");
+   575→  5790→    }
+   576→  5791→    if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(typeof e.detail==="string"?e.detail:`(${r.status}) ${detailFor(r.status)}`)}
+   577→  5792→    const blob=await r.blob();
+   578→  5793→    const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+   579→  5794→    a.download="نتائج-محطة-PDF.zip";a.click();
+   580→  5795→    toast("✅ تم الإنجاز — تم تحميل النتائج","ok");
+   581→  5796→  }catch(e){toast("❌ "+e.message,"err")}
+   582→  5797→  finally{btn.disabled=false;btn.innerHTML="▶️ تنفيذ"}
+   583→  5798→}
+   584→  5799→const drop=$("#drop");
+   585→  5800→drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("over")});
+   586→  5801→drop.addEventListener("dragleave",()=>drop.classList.remove("over"));
+   587→  5802→drop.addEventListener("drop",e=>{e.preventDefault();drop.classList.remove("over");addFiles(e.dataTransfer.files)});
+   588→  5803→$("#fi").addEventListener("change",e=>{addFiles(e.target.files);e.target.value=""});
+   589→  5804→$("#cmd").addEventListener("keydown",e=>{if(e.key==="Enter")doInterpret()});
+   590→  5805→checkConn();
+   591→  5806→renderSteps();
+   592→  5807→</script>
+   593→  5808→</body>
+   594→  5809→</html>
+   595→  5810→~~~~
+   596→  5811→
+   597→  5812→
+   598→  5813→## 📄 `vercel.json`
+   599→  5814→**إعدادات النشر على Vercel** — (19 سطر)
+   600→  5815→
+   601→  5816→~~~~
+   602→  5817→{
+   603→  5818→  "$schema": "https://openapi.vercel.sh/vercel.json",
+   604→  5819→  "version": 2,
+   605→  5820→  "builds": [
+   606→  5821→    { "src": "api/index.py", "use": "@vercel/python" },
+   607→  5822→    { "src": "public/**", "use": "@vercel/static" }
+   608→  5823→  ],
+   609→  5824→  "routes": [
+   610→  5825→    { "src": "/api/(.*)", "dest": "/api/index.py" },
+   611→
+   612→[showing lines 5216-5825 of 6338; use offset=5826 with limit to continue reading]
