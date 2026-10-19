@@ -16,7 +16,13 @@ import { toast } from "sonner";
 import { useWorkspace } from "@/store/workspace";
 
 /** ميزة جديدة: بحث سريع وتشغيل فوري للأدوات — Ctrl+K */
-export function CommandPalette({ onOpenWork }: { onOpenWork: () => void }) {
+export function CommandPalette({
+  onOpenWork,
+  onOpenConvert,
+}: {
+  onOpenWork: () => void;
+  onOpenConvert?: () => void;
+}) {
   const { open, setOpen } = useCommandPalette();
   const addStep = useWorkspace((s) => s.addStep);
 
@@ -58,6 +64,27 @@ export function CommandPalette({ onOpenWork }: { onOpenWork: () => void }) {
             </CommandGroup>
           );
         })}
+        <CommandSeparator />
+        <CommandGroup heading="التحويل">
+          <CommandItem
+            onSelect={() => {
+              setOpen(false);
+              if (onOpenConvert) {
+                onOpenConvert();
+              } else {
+                onOpenWork();
+              }
+              toast.success("تم فتح استوديو التحويل");
+            }}
+            value="استوديو التحويل اتوكاد ريفيت ادوبي dwg dxf rvt psd ai indd"
+          >
+            <span aria-hidden>🔄</span>
+            <span className="font-bold">استوديو التحويل — اتوكاد وريفيت وأدوبي إلى PDF</span>
+            <span className="text-xs text-muted-foreground mr-auto truncate max-w-40">
+              DXF · DWG · RVT · PSD · AI · INDD
+            </span>
+          </CommandItem>
+        </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="مساعدة">
           <CommandItem

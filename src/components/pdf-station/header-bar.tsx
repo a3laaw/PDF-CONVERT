@@ -1,12 +1,14 @@
 "use client";
 
-import { TrainFront, ShieldCheck, Command } from "lucide-react";
+import { TrainFront, ShieldCheck, Command, FileOutput } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toHindiDigits } from "@/lib/arabic";
 
+export type AppView = "home" | "work" | "convert";
+
 interface Props {
-  view: "home" | "work";
-  onViewChange: (v: "home" | "work") => void;
+  view: AppView;
+  onViewChange: (v: AppView) => void;
   onOpenPalette: () => void;
 }
 
@@ -46,10 +48,30 @@ export function HeaderBar({ view, onViewChange, onOpenPalette }: Props) {
           >
             مساحة العمل
           </Button>
+          <Button
+            variant={view === "convert" ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => onViewChange("convert")}
+            className="font-bold gap-1.5"
+          >
+            <FileOutput className="size-4" aria-hidden />
+            استوديو التحويل
+            <span className="hidden lg:inline-flex items-center rounded-full bg-teal-100 text-teal-800 border border-teal-200 px-1.5 text-[9px] font-bold">
+              جديد
+            </span>
+          </Button>
 
-          <span className="hidden md:inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1.5 text-xs font-bold text-emerald-700 mr-2">
+          <span
+            className={`hidden md:inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold mr-2 ${
+              view === "convert"
+                ? "bg-amber-50 border-amber-200 text-amber-700"
+                : "bg-emerald-50 border-emerald-200 text-emerald-700"
+            }`}
+          >
             <ShieldCheck className="size-3.5" aria-hidden />
-            يعمل داخل متصفحك — لا يُرفع أي ملف
+            {view === "convert"
+              ? "تحويل على الخادم — تُحذف فورًا وبعد ساعتين"
+              : "يعمل داخل متصفحك — لا يُرفع أي ملف"}
           </span>
 
           <Button

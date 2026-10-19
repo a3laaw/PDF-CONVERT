@@ -150,3 +150,19 @@ body {
 .col-divider {
   border-inline-start: 1px dashed var(--border);
 }
+
+/* شريط تمرير أنيق لقوائم الملفات الطويلة */
+.styled-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.styled-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.styled-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
+.styled-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
