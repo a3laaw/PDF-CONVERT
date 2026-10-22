@@ -145,6 +145,35 @@ export async function engineMerge(
   return result;
 }
 
+export interface UnmarkReport {
+  pages: number;
+  annots: number;
+  hits: number;
+}
+
+/** حذف العلامة المائية: نصوص + طوابع/تعليقات عبر أمر unmark في المحرك */
+export async function engineUnmark(
+  inputPath: string,
+  outputPath: string,
+  texts: string,
+  removeAnnots: boolean
+): Promise<UnmarkReport> {
+  const proc = await runEngine([
+    "unmark",
+    inputPath,
+    outputPath,
+    texts.slice(0, 400),
+    removeAnnots ? "1" : "0",
+  ]);
+  const result = parseEngineResult(proc.stdout);
+  if (!result.ok) throw new Error(result.error || "unmark failed");
+  return {
+    pages: result.pages,
+    annots: Number(result.info["Annotations removed"] ?? 0) || 0,
+    hits: Number(result.info["Text hits"] ?? 0) || 0,
+  };
+}
+
 export async function makeThumbFor(
   pdfPath: string,
   thumbPath: string,

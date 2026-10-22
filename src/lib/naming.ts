@@ -14,6 +14,7 @@ export const OP_SUFFIX: Partial<Record<OpId, string>> = {
   reorder: "مرتب",
   page_numbers: "مرقّم",
   watermark: "مختوم",
+  remove_watermark: "بدون-علامة",
   nup: "صفحتين-في-الورقة",
   metadata: "بعد-البيانات",
   extract_text: "نص",

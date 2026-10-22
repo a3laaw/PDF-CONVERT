@@ -1,0 +1,11 @@
+HTTP/1.1 200 OK
+vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+cache-control: no-store
+content-disposition: attachment; filename*=UTF-8''text-wm.pdf
+content-length: 408304
+content-type: application/pdf
+x-unmark-report: %7B%22pages%22%3A3%2C%22annots%22%3A0%2C%22hits%22%3A18%2C%22bytes%22%3A408304%7D
+Date: Thu, 22 Oct 2026 10:07:35 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+

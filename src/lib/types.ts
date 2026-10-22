@@ -11,6 +11,7 @@ export type OpId =
   | "reorder"
   | "split"
   | "watermark"
+  | "remove_watermark"
   | "page_numbers"
   | "images_to_pdf"
   | "pdf_to_images"

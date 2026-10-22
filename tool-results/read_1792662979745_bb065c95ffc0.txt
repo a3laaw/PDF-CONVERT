@@ -1,0 +1,636 @@
+     1→"use client";
+     2→
+     3→/* شاشة العمل الجديدة — عرض الملف + شريط أدوات واحد، بدون أوامر نصية ولا شرح */
+     4→
+     5→import { useEffect, useMemo, useRef, useState } from "react";
+     6→import { Check, Pencil, Plus, X } from "lucide-react";
+     7→import { useWorkspace } from "@/store/workspace";
+     8→import { TOOLS_BY_ID } from "@/lib/tools-catalog";
+     9→import { resultName } from "@/lib/naming";
+    10→import { downloadBlob, openBlobInNewTab, pdfPageThumbs } from "@/lib/pdf-engine";
+    11→import { toHindiDigits } from "@/lib/arabic";
+    12→import { toast } from "sonner";
+    13→import type { OpId, ResultFile } from "@/lib/types";
+    14→import { Button } from "@/components/ui/button";
+    15→import { cn } from "@/lib/utils";
+    16→
+    17→/* ─────────── أيقونات الأدوات ─────────── */
+    18→const svg = (paths: React.ReactNode) => (
+    19→  <svg
+    20→    viewBox="0 0 24 24"
+    21→    fill="none"
+    22→    stroke="currentColor"
+    23→    strokeWidth={1.8}
+    24→    strokeLinecap="round"
+    25→    strokeLinejoin="round"
+    26→    className="size-5"
+    27→    aria-hidden
+    28→  >
+    29→    {paths}
+    30→  </svg>
+    31→);
+    32→
+    33→const TOOL_ICONS: Record<string, React.ReactNode> = {
+    34→  convert: svg(<path d="M4 7h13l-3-3M20 17H7l3 3" />),
+    35→  compress: svg(<path d="M4 9h16M4 15h10M9 4l-4 5 4 5" />),
+    36→  merge: svg(
+    37→    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+    38→  ),
+    39→  split: svg(
+    40→    <>
+    41→      <circle cx="7" cy="7" r="2.5" />
+    42→      <circle cx="7" cy="17" r="2.5" />
+    43→      <path d="M9 8.5 20 19M9 15.5 20 5" />
+    44→    </>
+    45→  ),
+    46→  extract: svg(
+    47→    <>
+    48→      <rect x="4" y="3" width="16" height="18" rx="2" />
+    49→      <path d="M8 8h8M8 12h8M8 16h5" />
+    50→    </>
+    51→  ),
+    52→  delete: svg(
+    53→    <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+    54→  ),
+    55→  rotate: svg(<path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6" />),
+    56→  reorder: svg(<path d="M8 6v12M8 6 5 9M8 6l3 3M16 18V6M16 18l-3-3M16 18l3-3" />),
+    57→  page_numbers: svg(<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" />),
+    58→  watermark: svg(
+    59→    <>
+    60→      <path d="M12 3s5 4.5 5 9a5 5 0 0 1-10 0c0-4.5 5-9 5-9Z" />
+    61→      <path d="M5 21h14" />
+    62→    </>
+    63→  ),
+    64→  pdf_to_images: svg(
+    65→    <>
+    66→      <rect x="3" y="3" width="18" height="18" rx="2" />
+    67→      <circle cx="9" cy="9" r="2" />
+    68→      <path d="m21 15-4-4-8 8" />
+    69→    </>
+    70→  ),
+    71→  images_to_pdf: svg(
+    72→    <>
+    73→      <rect x="3" y="5" width="18" height="14" rx="2" />
+    74→      <path d="M3 15l4-4 4 4 5-6 5 6" />
+    75→    </>
+    76→  ),
+    77→  extract_text: svg(
+    78→    <>
+    79→      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
+    80→      <path d="M14 3v6h6M9 13h6M9 17h4" />
+    81→    </>
+    82→  ),
+    83→};
+    84→
+    85→const TOOLBAR: { id: OpId | "convert"; label: string }[] = [
+    86→  { id: "convert", label: "تحويل" },
+    87→  { id: "compress", label: "تصغير" },
+    88→  { id: "merge", label: "دمج" },
+    89→  { id: "split", label: "فصل" },
+    90→  { id: "extract", label: "استخراج" },
+    91→  { id: "delete", label: "حذف" },
+    92→  { id: "rotate", label: "تدوير" },
+    93→  { id: "reorder", label: "ترتيب" },
+    94→  { id: "page_numbers", label: "ترقيم" },
+    95→  { id: "watermark", label: "ختم" },
+    96→  { id: "pdf_to_images", label: "لصور" },
+    97→  { id: "images_to_pdf", label: "من صور" },
+    98→  { id: "extract_text", label: "نص" },
+    99→];
+   100→
+   101→/* ─────────── أدوات مساعدة ─────────── */
+   102→
+   103→async function renderPageDataUrl(file: File, pageNo: number, maxW = 820): Promise<string> {
+   104→  const pdfjs = await import("pdfjs-dist");
+   105→  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+   106→  const bytes = new Uint8Array(await file.arrayBuffer());
+   107→  const doc = await pdfjs.getDocument({ data: bytes }).promise;
+   108→  const page = await doc.getPage(Math.max(1, pageNo));
+   109→  const v1 = page.getViewport({ scale: 1 });
+   110→  const viewport = page.getViewport({ scale: Math.min(1.8, maxW / v1.width) });
+   111→  const canvas = document.createElement("canvas");
+   112→  canvas.width = Math.floor(viewport.width);
+   113→  canvas.height = Math.floor(viewport.height);
+   114→  const c2 = canvas.getContext("2d")!;
+   115→  c2.fillStyle = "#ffffff";
+   116→  c2.fillRect(0, 0, canvas.width, canvas.height);
+   117→  await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+   118→  return canvas.toDataURL("image/jpeg", 0.85);
+   119→}
+   120→
+   121→function fmtSize(b: number): string {
+   122→  if (b >= 1048576) return `${toHindiDigits((b / 1048576).toFixed(1).replace(".", "٫"))} م.ب`;
+   123→  return `${toHindiDigits(Math.max(1, Math.round(b / 1024)))} ك.ب`;
+   124→}
+   125→
+   126→function extLabel(name: string): string {
+   127→  const e = name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() ?? "ملف";
+   128→  return e === "JPG" ? "JPG" : e;
+   129→}
+   130→
+   131→/* ─────────── المكوّن ─────────── */
+   132→
+   133→export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
+   134→  const files = useWorkspace((s) => s.files);
+   135→  const results = useWorkspace((s) => s.results);
+   136→  const runState = useWorkspace((s) => s.runState);
+   137→  const runMessage = useWorkspace((s) => s.runMessage);
+   138→  const runProgress = useWorkspace((s) => s.runProgress);
+   139→  const addFiles = useWorkspace((s) => s.addFiles);
+   140→  const removeFile = useWorkspace((s) => s.removeFile);
+   141→  const runOnFiles = useWorkspace((s) => s.runOnFiles);
+   142→  const renameResult = useWorkspace((s) => s.renameResult);
+   143→  const clearResults = useWorkspace((s) => s.clearResults);
+   144→  const downloadAll = useWorkspace((s) => s.downloadAll);
+   145→
+   146→  const [activeId, setActiveId] = useState<string | null>(null);
+   147→  const [selFiles, setSelFiles] = useState<Set<string> | null>(null);
+   148→  const [tool, setTool] = useState<OpId | null>(null);
+   149→  const [params, setParams] = useState<Record<string, string>>({});
+   150→  const [selPages, setSelPages] = useState<number[]>([]);
+   151→  const [thumbs, setThumbs] = useState<Record<string, string[]>>({});
+   152→  const [page, setPage] = useState(1);
+   153→
+   154→  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+   155→  const [dragOver, setDragOver] = useState(false);
+   156→  const inputRef = useRef<HTMLInputElement>(null);
+   157→  const thumbsReq = useRef<Set<string>>(new Set());
+   158→
+   159→  /* الملف النشط: المعيّن بالنقر أو آخر ملف أُضيف — اشتقاق بلا effects */
+   160→  const activeFile = files.find((f) => f.id === activeId) ?? files[files.length - 1] ?? null;
+   161→  const effectiveSel = selFiles ?? (activeFile ? new Set([activeFile.id]) : new Set<string>());
+   162→  const running = runState === "running";
+   163→
+   164→  /* مصغرات صفحات الـ PDF النشط */
+   165→  useEffect(() => {
+   166→    if (!activeFile || activeFile.kind !== "pdf") return;
+   167→    if (thumbs[activeFile.id] || thumbsReq.current.has(activeFile.id)) return;
+   168→    thumbsReq.current.add(activeFile.id);
+   169→    pdfPageThumbs(activeFile.file, 60)
+   170→      .then((arr) => setThumbs((t) => ({ ...t, [activeFile.id]: arr })))
+   171→      .catch(() => thumbsReq.current.delete(activeFile.id));
+   172→  }, [activeFile, thumbs]);
+   173→
+   174→  /* المعاينة الكبيرة للصفحة النشطة — مفتوحة بالمفتاح لتفادي setState المتزامن */
+   175→  const previewKey = activeFile ? `${activeFile.id}:${activeFile.kind === "image" ? "img" : page}` : "";
+   176→  const [previewState, setPreviewState] = useState<{ key: string; url: string } | null>(null);
+   177→  useEffect(() => {
+   178→    if (!activeFile || !previewKey) return;
+   179→    let alive = true;
+   180→    let objUrl: string | null = null;
+   181→    const done = (url: string) => {
+   182→      if (alive) setPreviewState({ key: previewKey, url });
+   183→    };
+   184→    if (activeFile.kind === "image") {
+   185→      Promise.resolve().then(() => {
+   186→        objUrl = URL.createObjectURL(activeFile.file);
+   187→        done(objUrl);
+   188→      });
+   189→    } else {
+   190→      renderPageDataUrl(activeFile.file, page)
+   191→        .then(done)
+   192→        .catch(() => undefined);
+   193→    }
+   194→    return () => {
+   195→      alive = false;
+   196→      if (objUrl) URL.revokeObjectURL(objUrl);
+   197→    };
+   198→  }, [activeFile, page, previewKey]);
+   199→  const preview = previewState && previewState.key === previewKey ? previewState.url : "";
+   200→
+   201→  const pickTool = (id: OpId | "convert") => {
+   202→    if (id === "convert") {
+   203→      onOpenConvert();
+   204→      return;
+   205→    }
+   206→    setTool(id);
+   207→    const def: Record<string, string> = {};
+   208→    for (const f of TOOLS_BY_ID[id].fields) if (f.default !== undefined) def[f.key] = f.default;
+   209→    const pf = TOOLS_BY_ID[id].fields.find((f) => f.pagesPicker);
+   210→    if (pf) def[pf.key] = selPages.join(",");
+   211→    setParams(def);
+   212→  };
+   213→
+   214→  const togglePage = (n: number) => {
+   215→    const next = selPages.includes(n)
+   216→      ? selPages.filter((x) => x !== n)
+   217→      : [...selPages, n].sort((a, b) => a - b);
+   218→    setSelPages(next);
+   219→    if (tool) {
+   220→      const pf = TOOLS_BY_ID[tool].fields.find((f) => f.pagesPicker);
+   221→      if (pf) setParams((p) => ({ ...p, [pf.key]: next.join(",") }));
+   222→    }
+   223→  };
+   224→
+   225→  const toggleSel = (id: string) =>
+   226→    setSelFiles((s) => {
+   227→      const n = new Set(s ?? (activeFile ? [activeFile.id] : []));
+   228→      if (n.has(id)) {
+   229→        if (n.size > 1) n.delete(id);
+   230→      } else {
+   231→        n.add(id);
+   232→      }
+   233→      return n;
+   234→    });
+   235→
+   236→  const expectedName = useMemo(() => {
+   237→    if (!tool || !activeFile) return null;
+   238→    const t = TOOLS_BY_ID[tool];
+   239→    const target = t.accepts.includes(activeFile.kind)
+   240→      ? activeFile
+   241→      : files.find((f) => effectiveSel.has(f.id) && t.accepts.includes(f.kind));
+   242→    return target ? resultName(tool, target.name) : null;
+   243→  }, [tool, activeFile, files, effectiveSel]);
+   244→
+   245→  const execute = async () => {
+   246→    if (!tool || running) return;
+   247→    const t = TOOLS_BY_ID[tool];
+   248→    const chosen = files.filter((f) => effectiveSel.has(f.id) && t.accepts.includes(f.kind));
+   249→    if (chosen.length === 0) {
+   250→      toast.error(t.accepts.includes("image") ? "حدد صورًا من قائمة الملفات أولًا" : "حدد ملف PDF من قائمة الملفات أولًا");
+   251→      return;
+   252→    }
+   253→    await runOnFiles(tool, params, chosen.map((f) => f.id));
+   254→    const st = useWorkspace.getState();
+   255→    if (st.runState === "error") toast.error(st.runMessage);
+   256→  };
+   257→
+   258→  const download = (r: ResultFile) => {
+   259→    const embedded = downloadBlob(r.blob, r.name);
+   260→    if (embedded) {
+   261→      toast("بدأ التنزيل", {
+   262→        description: "إن لم يظهر الملف فافتح النتيجة في تبويب مستقل",
+   263→        action: { label: "فتح في تبويب", onClick: () => openBlobInNewTab(r.blob) },
+   264→        duration: 10_000,
+   265→      });
+   266→    } else {
+   267→      toast.success("بدأ التنزيل");
+   268→    }
+   269→  };
+   270→
+   271→  const commitRename = () => {
+   272→    if (!renaming) return;
+   273→    const name = renaming.value.trim();
+   274→    if (name) renameResult(renaming.id, name);
+   275→    setRenaming(null);
+   276→  };
+   277→
+   278→  return (
+   279→    <div
+   280→      className="mx-auto max-w-7xl px-4 py-5"
+   281→      onDragOver={(e) => {
+   282→        e.preventDefault();
+   283→        setDragOver(true);
+   284→      }}
+   285→      onDragLeave={() => setDragOver(false)}
+   286→      onDrop={(e) => {
+   287→        e.preventDefault();
+   288→        setDragOver(false);
+   289→        const fs = Array.from(e.dataTransfer.files);
+   290→        if (fs.length) addFiles(fs);
+   291→      }}
+   292→    >
+   293→      <input
+   294→        ref={inputRef}
+   295→        type="file"
+   296→        multiple
+   297→        accept=".pdf,image/*"
+   298→        className="hidden"
+   299→        onChange={(e) => {
+   300→          const fs = Array.from(e.target.files ?? []);
+   301→          if (fs.length) addFiles(fs);
+   302→          e.target.value = "";
+   303→        }}
+   304→      />
+   305→
+   306→      {files.length === 0 ? (
+   307→        /* ─── لا ملفات: منطقة إفلات واحدة ─── */
+   308→        <div
+   309→          className={cn(
+   310→            "mt-8 rounded-3xl border-2 border-dashed bg-white/70 py-20 text-center transition",
+   311→            dragOver ? "border-primary bg-primary/5" : "border-primary/30"
+   312→          )}
+   313→          onClick={() => inputRef.current?.click()}
+   314→          role="button"
+   315→          tabIndex={0}
+   316→          onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
+   317→        >
+   318→          <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/25">
+   319→            <Plus className="size-7" aria-hidden />
+   320→          </div>
+   321→          <h2 className="mt-4 text-xl font-extrabold">اسحب ملفاتك هنا</h2>
+   322→          <p className="mt-1 text-sm text-muted-foreground">PDF أو صور</p>
+   323→          <Button
+   324→            className="mt-5 px-8 font-extrabold"
+   325→            onClick={(e) => {
+   326→              e.stopPropagation();
+   327→              inputRef.current?.click();
+   328→            }}
+   329→          >
+   330→            اختيار ملفات
+   331→          </Button>
+   332→        </div>
+   333→      ) : (
+   334→        <>
+   335→          {/* ─── شريط الأدوات ─── */}
+   336→          <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
+   337→            {TOOLBAR.map(({ id, label }) => (
+   338→              <button
+   339→                key={id}
+   340→                onClick={() => pickTool(id)}
+   341→                className={cn(
+   342→                  "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
+   343→                  tool === id
+   344→                    ? "bg-primary/10 text-primary outline outline-1 outline-primary/30"
+   345→                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
+   346→                )}
+   347→              >
+   348→                {TOOL_ICONS[id]}
+   349→                {label}
+   350→              </button>
+   351→            ))}
+   352→          </div>
+   353→
+   354→          {/* ─── الجسم: ملفات + صفحات + معاينة ─── */}
+   355→          <div className="mt-4 grid gap-4 lg:grid-cols-[200px_130px_1fr]">
+   356→            <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-3">
+   357→              <p className="px-1 text-[11px] font-bold text-muted-foreground">الملفات</p>
+   358→              <div className="flex max-h-[460px] flex-col gap-2 overflow-y-auto">
+   359→                {files.map((f) => (
+   360→                  <div
+   361→                    key={f.id}
+   362→                    onClick={() => {
+   363→                      setActiveId(f.id);
+   364→                      setPage(1);
+   365→                      setSelPages([]);
+   366→                    }}
+   367→                    className={cn(
+   368→                      "relative flex cursor-pointer items-center gap-2 rounded-xl border p-2",
+   369→                      f.id === activeId
+   370→                        ? "border-primary bg-primary/5"
+   371→                        : effectiveSel.has(f.id)
+   372→                          ? "border-primary/50"
+   373→                          : "border-border"
+   374→                    )}
+   375→                  >
+   376→                    <button
+   377→                      onClick={(e) => {
+   378→                        e.stopPropagation();
+   379→                        toggleSel(f.id);
+   380→                      }}
+   381→                      aria-label="تحديد الملف"
+   382→                      className={cn(
+   383→                        "absolute -left-1.5 -top-1.5 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
+   384→                        effectiveSel.has(f.id)
+   385→                          ? "border-primary bg-primary text-white"
+   386→                          : "border-border bg-white text-transparent"
+   387→                      )}
+   388→                    >
+   389→                      ✓
+   390→                    </button>
+   391→                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-red-50 text-[9px] font-extrabold text-red-600">
+   392→                      {f.kind === "image" ? "IMG" : "PDF"}
+   393→                    </span>
+   394→                    <span className="min-w-0">
+   395→                      <span className="block max-w-[108px] truncate text-xs font-bold">{f.name}</span>
+   396→                      <span className="block text-[10px] text-muted-foreground">
+   397→                        {f.pages ? `${toHindiDigits(f.pages)} صفحات · ` : ""}
+   398→                        {fmtSize(f.size)}
+   399→                      </span>
+   400→                    </span>
+   401→                    <button
+   402→                      onClick={(e) => {
+   403→                        e.stopPropagation();
+   404→                        removeFile(f.id);
+   405→                      }}
+   406→                      aria-label="إزالة الملف"
+   407→                      className="mr-auto text-muted-foreground/40 hover:text-red-500"
+   408→                    >
+   409→                      <X className="size-3.5" aria-hidden />
+   410→                    </button>
+   411→                  </div>
+   412→                ))}
+   413→                <button
+   414→                  onClick={() => inputRef.current?.click()}
+   415→                  className="rounded-xl border border-dashed border-border py-2.5 text-xs font-bold text-muted-foreground hover:border-primary/40 hover:text-primary"
+   416→                >
+   417→                  + إضافة ملف
+   418→                </button>
+   419→              </div>
+   420→            </div>
+   421→
+   422→            <div className="hidden max-h-[560px] flex-col gap-2 overflow-y-auto rounded-2xl border border-border bg-white p-3 lg:flex">
+   423→              <p className="px-1 text-[11px] font-bold text-muted-foreground">الصفحات</p>
+   424→              {activeFile?.kind === "pdf" &&
+   425→                (thumbs[activeFile.id] ?? []).map((src, i) => (
+   426→                  <div
+   427→                    key={i}
+   428→                    onClick={() => setPage(i + 1)}
+   429→                    className={cn(
+   430→                      "relative shrink-0 cursor-pointer rounded-lg border bg-white p-1.5",
+   431→                      page === i + 1 ? "border-primary ring-2 ring-primary/15" : "border-border"
+   432→                    )}
+   433→                  >
+   434→                    <img src={src} alt={`صفحة ${toHindiDigits(i + 1)}`} className="w-full rounded" />
+   435→                    <button
+   436→                      onClick={(e) => {
+   437→                        e.stopPropagation();
+   438→                        togglePage(i + 1);
+   439→                      }}
+   440→                      aria-label="تحديد الصفحة"
+   441→                      className={cn(
+   442→                        "absolute -left-1.5 -top-1.5 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
+   443→                        selPages.includes(i + 1)
+   444→                          ? "border-primary bg-primary text-white"
+   445→                          : "border-border bg-white text-muted-foreground"
+   446→                      )}
+   447→                    >
+   448→                      {selPages.includes(i + 1) ? "✓" : toHindiDigits(i + 1)}
+   449→                    </button>
+   450→                  </div>
+   451→                ))}
+   452→              {activeFile?.kind === "pdf" && !thumbs[activeFile.id] && (
+   453→                <p className="py-4 text-center text-[11px] text-muted-foreground">جارٍ التحضير…</p>
+   454→              )}
+   455→              {activeFile?.kind === "image" && activeFile.thumb && (
+   456→                <img src={activeFile.thumb} alt="" className="rounded-lg border border-border" />
+   457→              )}
+   458→            </div>
+   459→
+   460→            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-border bg-slate-50 p-4">
+   461→              {preview ? (
+   462→                <img
+   463→                  src={preview}
+   464→                  alt="معاينة الملف"
+   465→                  className="max-h-[560px] max-w-full rounded-md bg-white shadow-xl shadow-black/10"
+   466→                />
+   467→              ) : (
+   468→                <div className="size-64 max-w-full animate-pulse rounded-md bg-white shadow-lg" />
+   469→              )}
+   470→              {activeFile?.kind === "pdf" && (activeFile.pages ?? 0) > 1 && (
+   471→                <div className="mt-4 flex items-center gap-3">
+   472→                  <button
+   473→                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+   474→                    aria-label="الصفحة السابقة"
+   475→                    className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
+   476→                  >
+   477→                    ›
+   478→                  </button>
+   479→                  <span className="text-sm font-extrabold text-muted-foreground">
+   480→                    {toHindiDigits(page)} / {toHindiDigits(activeFile.pages ?? 1)}
+   481→                  </span>
+   482→                  <button
+   483→                    onClick={() => setPage((p) => Math.min(activeFile.pages ?? 1, p + 1))}
+   484→                    aria-label="الصفحة التالية"
+   485→                    className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
+   486→                  >
+   487→                    ‹
+   488→                  </button>
+   489→                </div>
+   490→              )}
+   491→            </div>
+   492→          </div>
+   493→
+   494→          {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة ─── */}
+   495→          <div className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm">
+   496→            {tool ? (
+   497→              TOOLS_BY_ID[tool].fields.map((f) => (
+   498→                <span key={f.key} className="flex items-center gap-1.5">
+   499→                  <span className="text-[11px] font-bold text-muted-foreground">{f.label}</span>
+   500→                  {f.type === "select" ? (
+   501→                    <select
+   502→                      value={params[f.key] ?? f.default ?? ""}
+   503→                      onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+   504→                      className="rounded-lg border border-border bg-white px-2 py-1.5 text-xs font-bold"
+   505→                    >
+   506→                      {f.options?.map((o) => (
+   507→                        <option key={o.value} value={o.value}>
+   508→                          {o.label}
+   509→                        </option>
+   510→                      ))}
+   511→                    </select>
+   512→                  ) : (
+   513→                    <input
+   514→                      value={params[f.key] ?? ""}
+   515→                      onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+   516→                      placeholder={f.placeholder}
+   517→                      className="w-44 rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold placeholder:font-normal placeholder:text-muted-foreground/60"
+   518→                    />
+   519→                  )}
+   520→                </span>
+   521→              ))
+   522→            ) : (
+   523→              <span className="px-1 text-xs font-bold text-muted-foreground">اختر أداة من الشريط</span>
+   524→            )}
+   525→            <span className="flex-1" />
+   526→            {expectedName && (
+   527→              <span className="text-[11px] text-muted-foreground">
+   528→                تُحفظ باسم <b className="text-xs text-foreground">{expectedName}</b>
+   529→              </span>
+   530→            )}
+   531→            <Button size="sm" disabled={!tool || running} onClick={execute} className="px-6 font-extrabold">
+   532→              {running ? "جارٍ التنفيذ…" : "نفّذ"}
+   533→            </Button>
+   534→          </div>
+   535→          {running && (
+   536→            <div className="mt-2">
+   537→              <div className="h-1.5 overflow-hidden rounded-full bg-border">
+   538→                <div
+   539→                  className="h-full rounded-full bg-primary transition-all"
+   540→                  style={{ width: `${Math.round(runProgress * 100)}%` }}
+   541→                />
+   542→              </div>
+   543→              <p className="mt-1 text-[11px] font-bold text-muted-foreground">{runMessage}</p>
+   544→            </div>
+   545→          )}
+   546→        </>
+   547→      )}
+   548→
+   549→      {/* ─── النتائج ─── */}
+   550→      {results.length > 0 && (
+   551→        <div className="mt-5 rounded-2xl border-2 border-emerald-200 bg-white p-4 shadow-lg shadow-emerald-900/5">
+   552→          <div className="flex flex-wrap items-center gap-2">
+   553→            <span className="grid size-7 place-items-center rounded-lg bg-emerald-500 font-extrabold text-white">
+   554→              ✓
+   555→            </span>
+   556→            <h3 className="font-extrabold text-emerald-600">
+   557→              جاهز — {toHindiDigits(results.length)} {results.length === 1 ? "ملف" : "ملفات"}
+   558→            </h3>
+   559→            <span className="flex-1" />
+   560→            {results.length > 1 && (
+   561→              <Button variant="outline" size="sm" onClick={downloadAll} className="font-bold">
+   562→                تحميل الكل (ZIP)
+   563→              </Button>
+   564→            )}
+   565→            <Button
+   566→              variant="ghost"
+   567→              size="sm"
+   568→              onClick={clearResults}
+   569→              className="text-muted-foreground"
+   570→            >
+   571→              رجوع للشغل
+   572→            </Button>
+   573→          </div>
+   574→          <div className="mt-3 flex flex-col gap-2">
+   575→            {results.map((r) => (
+   576→              <div key={r.id} className="flex items-center gap-3 rounded-xl border border-border p-2.5">
+   577→                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-red-50 text-[9px] font-extrabold text-red-600">
+   578→                  {extLabel(r.name)}
+   579→                </span>
+   580→                {renaming?.id === r.id ? (
+   581→                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+   582→                    <input
+   583→                      autoFocus
+   584→                      value={renaming.value}
+   585→                      onChange={(e) => setRenaming({ id: r.id, value: e.target.value })}
+   586→                      onKeyDown={(e) => e.key === "Enter" && commitRename()}
+   587→                      className="w-full rounded-lg border border-primary/40 px-2 py-1 text-xs font-bold"
+   588→                    />
+   589→                    <button
+   590→                      onClick={commitRename}
+   591→                      aria-label="حفظ الاسم"
+   592→                      className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-500 text-white"
+   593→                    >
+   594→                      <Check className="size-3.5" aria-hidden />
+   595→                    </button>
+   596→                    <button
+   597→                      onClick={() => setRenaming(null)}
+   598→                      aria-label="إلغاء"
+   599→                      className="shrink-0 text-muted-foreground"
+   600→                    >
+   601→                      <X className="size-3.5" aria-hidden />
+   602→                    </button>
+   603→                  </span>
+   604→                ) : (
+   605→                  <span className="min-w-0 flex-1">
+   606→                    <span className="block truncate text-xs font-extrabold">{r.name}</span>
+   607→                    <span className="block text-[10px] text-muted-foreground">{fmtSize(r.size)}</span>
+   608→                  </span>
+   609→                )}
+   610→                {renaming?.id !== r.id && (
+   611→                  <>
+   612→                    <button
+   613→                      onClick={() => setRenaming({ id: r.id, value: r.name })}
+   614→                      aria-label="إعادة تسمية"
+   615→                      className="grid size-8 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground hover:text-primary"
+   616→                    >
+   617→                      <Pencil className="size-3.5" aria-hidden />
+   618→                    </button>
+   619→                    <Button
+   620→                      size="sm"
+   621→                      onClick={() => download(r)}
+   622→                      className="shrink-0 bg-emerald-600 font-extrabold text-white hover:bg-emerald-700"
+   623→                    >
+   624→                      تحميل
+   625→                    </Button>
+   626→                  </>
+   627→                )}
+   628→              </div>
+   629→            ))}
+   630→          </div>
+   631→        </div>
+   632→      )}
+   633→    </div>
+   634→  );
+   635→}
+   636→

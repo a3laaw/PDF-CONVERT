@@ -122,6 +122,8 @@ export async function runOp(
       return opSplit(inputs, label, ctx);
     case "watermark":
       return opWatermark(inputs, params, label, ctx);
+    case "remove_watermark":
+      return opRemoveWatermark(inputs, params, label, ctx);
     case "page_numbers":
       return opPageNumbers(inputs, params, label, ctx);
     case "images_to_pdf":
@@ -369,6 +371,76 @@ async function opWatermark(
     }
     const saved = await doc.save({ useObjectStreams: true });
     results.push(resultFile(resultName("watermark", input.name), saved, label, "pdf"));
+  }
+  return results;
+}
+
+/* حذف العلامة المائية — المعالجة على الخادم (PyMuPDF) مع حذف الملف فورًا.
+   نحذف: نصوص العلامة المطابقة (بكل صيغ العربية: منطقي/معكوس/مُشكَّل) + الطوابع والتعليقات.
+   لا تُحذف العلامات المرسومة كصور مدمجة داخل الصفحة. */
+async function opRemoveWatermark(
+  inputs: EngineInput[],
+  params: Record<string, string>,
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile[]> {
+  const results: ResultFile[] = [];
+  for (const input of inputs) {
+    ctx.onProgress?.(`جارٍ تنظيف العلامات من «${input.name}»…`);
+    const fd = new FormData();
+    fd.append("file", input.file, input.name);
+    fd.append("texts", params.text ?? "");
+    fd.append("annots", "1");
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 180_000);
+    let res: Response;
+    try {
+      res = await fetch("/api/unmark", { method: "POST", body: fd, signal: ctrl.signal });
+    } catch {
+      throw new Error("انقطع الاتصال بالخادم أثناء التنظيف — تحقق من الشبكة وأعد المحاولة");
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      let msg = "تعذر تنظيف العلامة المائية";
+      try {
+        const j = (await res.json()) as { error?: string };
+        if (j?.error) msg = j.error;
+      } catch {
+        /* رد غير JSON */
+      }
+      throw new Error(msg);
+    }
+    const raw = res.headers.get("X-Unmark-Report");
+    let report0: { pages?: number; annots?: number; hits?: number } | null = null;
+    if (raw) {
+      try {
+        report0 = JSON.parse(decodeURIComponent(raw));
+      } catch {
+        /* بلا تقرير */
+      }
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length === 0) throw new Error("جاء رد الخادم فارغًا — أعد المحاولة");
+    const report = report0;
+    if (report && (report.hits ?? 0) === 0 && (report.annots ?? 0) === 0) {
+      // ملف نظيف في الدفعة — نتجاوزه دون إفشال البقية
+      const { toast } = await import("sonner");
+      toast.info(`«${input.name}»: لا توجد علامات مطابقة فيه — لم نغيّره`);
+      continue;
+    }
+    const { toast } = await import("sonner");
+    const parts: string[] = [];
+    if (report?.hits) parts.push(`${toHindiDigits(report.hits)} موضع نصي`);
+    if (report?.annots) parts.push(`${toHindiDigits(report.annots)} طابع/تعليق`);
+    toast.success(`«${input.name}»: تم الحذف — ${parts.join(" و") || "بدون تغييرات"}`);
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    results.push(resultFile(resultName("remove_watermark", input.name), blob, label, "pdf"));
+  }
+  if (results.length === 0 && inputs.length > 0) {
+    throw new Error(
+      "لم نجد ما يُحذف في الملفات المحددة — اكتب نص العلامة كما يظهر بالضبط، أو قد تكون العلامة مطبوعة داخل صور (تلك لا نستطيع حذفها)"
+    );
   }
   return results;
 }

@@ -5,6 +5,7 @@ Universal design-file -> PDF conversion engine.
 Usage:
   python3 convert_to_pdf.py convert <input_file> <output_pdf> [thumb_png]
   python3 convert_to_pdf.py merge <output_pdf> <input1> <input2> ...
+  python3 convert_to_pdf.py unmark <input_pdf> <output_pdf> [texts_csv] [annots 1/0]
 Protocol: prints "@@RESULT@@{json}" as the LAST stdout line.
 """
 import sys, os, io, json, re, struct, subprocess, datetime
@@ -587,6 +588,89 @@ def cmd_merge(outp, inputs):
                         'Output size': human_size(os.path.getsize(outp))})
     merged.close()
 
+def _unmark_candidates(t):
+    """صيغ البحث المحتملة لنفس الكلمة:
+    منطقي كما هو / معكوس بصريًا / أشكال عرض مُشكَّلة / مُشكَّلة معكوسة
+    لأن ملفات PDF تخزن العربية أحيانًا معكوسة أو بأشكال présentation"""
+    cands = [t]
+    if t[::-1] != t:
+        cands.append(t[::-1])
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+        shaped = arabic_reshaper.reshape(t)
+        vis = get_display(shaped)
+        for v in (shaped, vis):
+            if v and v not in cands:
+                cands.append(v)
+    except Exception:
+        pass
+    return cands
+
+def _collect_quads(page, texts):
+    """اجمع quads الكلمات المطابقة من كل الصيغ مع إزالة التكرار"""
+    quads = []
+    for t in texts:
+        for cand in _unmark_candidates(t):
+            try:
+                quads.extend(page.search_for(cand, quads=True))
+            except Exception:
+                pass
+    kept = []
+    for q in quads:
+        r = q.rect
+        dup = False
+        for k in kept:
+            kr = k.rect
+            ix = max(0.0, min(r.x1, kr.x1) - max(r.x0, kr.x0))
+            iy = max(0.0, min(r.y1, kr.y1) - max(r.y0, kr.y0))
+            a = min(max(0.01, r.get_area()), max(0.01, kr.get_area()))
+            if ix * iy > 0.6 * a:
+                dup = True
+                break
+        if not dup:
+            kept.append(q)
+    return kept
+
+def cmd_unmark(inp, outp, texts_raw='', annots='1'):
+    """حذف العلامة المائية: نصوص مطابقة (redaction دقيق بالـ quads) + الطوابع والتعليقات.
+    الصور والرسومات المتجهة لا تُمس — نحذف الحروف فقط لتبقى باقي الصفحة سليمة."""
+    import fitz
+    if not os.path.exists(inp):
+        raise RuntimeError('pdf not found: ' + inp)
+    doc = fitz.open(inp)
+    if doc.needs_pass:
+        raise RuntimeError('file is encrypted (password protected)')
+    texts = [t.strip() for t in re.split(r'[,،;؛\n]+', texts_raw or '') if t.strip()]
+    removed_annots = 0
+    total_hits = 0
+    for page in doc:
+        if annots == '1':
+            for a in list(page.annots() or []):
+                page.delete_annot(a)
+                removed_annots += 1
+        if texts:
+            quads = _collect_quads(page, texts)
+            for q in quads:
+                page.add_redact_annot(q, fill=False)
+            if quads:
+                total_hits += len(quads)
+                try:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
+                                          graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+                except TypeError:
+                    page.apply_redactions()
+    if doc.page_count == 0:
+        raise RuntimeError('no pages')
+    doc.save(outp, garbage=3, deflate=True)
+    RESULT.update(ok=True, pages=doc.page_count, engine='pymupdf-unmark',
+                  note_ar='تم تنظيف العلامة المائية.',
+                  info={'Text hits': str(total_hits),
+                        'Annotations removed': str(removed_annots),
+                        'Searched words': str(len(texts)),
+                        'Output size': human_size(os.path.getsize(outp))})
+    doc.close()
+
 def main():
     try:
         argv = sys.argv[1:]
@@ -599,6 +683,10 @@ def main():
             cmd_thumb(argv[1], argv[2], argv[3] if len(argv) > 3 else 420)
         elif argv[0] == 'merge':
             cmd_merge(argv[1], argv[2:])
+        elif argv[0] == 'unmark':
+            cmd_unmark(argv[1], argv[2],
+                       argv[3] if len(argv) > 3 else '',
+                       argv[4] if len(argv) > 4 else '1')
         else:
             RESULT['error'] = 'unknown command: ' + argv[0]
     except FileNotFoundError as e:

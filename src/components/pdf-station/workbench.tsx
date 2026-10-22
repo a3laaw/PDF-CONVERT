@@ -61,6 +61,13 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
       <path d="M5 21h14" />
     </>
   ),
+  remove_watermark: svg(
+    <>
+      <path d="m7 21-4.3-4.3a2.4 2.4 0 0 1 0-3.4l9.6-9.6a2.4 2.4 0 0 1 3.4 0l5.6 5.6a2.4 2.4 0 0 1 0 3.4L13 21" />
+      <path d="M22 21H7" />
+      <path d="m5 11 9 9" />
+    </>
+  ),
   pdf_to_images: svg(
     <>
       <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -93,6 +100,7 @@ const TOOLBAR: { id: OpId | "convert"; label: string }[] = [
   { id: "reorder", label: "ترتيب" },
   { id: "page_numbers", label: "ترقيم" },
   { id: "watermark", label: "ختم" },
+  { id: "remove_watermark", label: "بدون علامة" },
   { id: "pdf_to_images", label: "لصور" },
   { id: "images_to_pdf", label: "من صور" },
   { id: "extract_text", label: "نص" },
@@ -493,6 +501,11 @@ export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
 
           {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة ─── */}
           <div className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm">
+            {tool === "remove_watermark" && (
+              <span className="w-full text-[10px] text-muted-foreground">
+                هذه الأداة تعالج الملف على الخادم ويُحذف فور انتهاء التنفيذ — والعلامات المرسومة داخل صور قد لا تُحذف
+              </span>
+            )}
             {tool ? (
               TOOLS_BY_ID[tool].fields.map((f) => (
                 <span key={f.key} className="flex items-center gap-1.5">
