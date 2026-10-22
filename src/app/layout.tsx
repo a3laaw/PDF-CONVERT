@@ -10,7 +10,7 @@ const tajawal = Tajawal({
 });
 
 export const metadata: Metadata = {
-  title: "محطّة PDF — كل أدوات PDF في مكان واحد",
+  title: "محوّل PDF — كل أدوات ملفاتك بالعربي",
   description:
     "منصة عربية 100% لأدوات PDF: ادمج، صغّر الحجم، دوّر، رقّم، أضف ختمًا، حوّل الصور — وحدّثًا: استوديو التحويل من اتوكاد (DWG/DXF) وريفيت (RVT) وملفات أدوبي (PSD/AI/EPS/INDD) إلى PDF. تعمل داخل متصفحك بالكامل: خصوصية تامة.",
   keywords: [
@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     "أدوات PDF",
     "دمج PDF",
     "ضغط PDF",
-    "محطة PDF",
+    "محوّل PDF",
     "تحويل صور",
     "أدوات عربية",
     "تحويل اتوكاد PDF",
@@ -31,12 +31,12 @@ export const metadata: Metadata = {
     "INDD PDF",
     "تحويل ملفات أدوبي",
   ],
-  authors: [{ name: "محطّة PDF" }],
+  authors: [{ name: "محوّل PDF" }],
   openGraph: {
-    title: "محطّة PDF",
-    description:
-      "كل أدوات PDF في مكان واحد + استوديو التحويل: اتوكاد وريفيت وأدوبي إلى PDF — عربي بالكامل، مجاني.",
-    siteName: "محطّة PDF",
+    title: "محوّل PDF",
+  description:
+    "كل أدوات PDF في مكان واحد + التحويل: اتوكاد وريفيت وأدوبي إلى PDF — عربي بالكامل، مجاني.",
+    siteName: "محوّل PDF",
     type: "website",
   },
 };

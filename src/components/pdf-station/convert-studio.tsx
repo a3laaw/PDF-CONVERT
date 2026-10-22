@@ -753,9 +753,9 @@ export function ConvertStudio() {
       <div className="mt-10 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
         <Info className="size-5 text-amber-600 shrink-0 mt-0.5" aria-hidden />
         <p className="text-sm text-amber-900 leading-relaxed">
-          <b>لماذا يحتاج الاستوديو إلى خادم؟</b> قراءة صيغ مثل DXF وPSD وDWG تتطلب محركات
-          تحليل متخصصة (ezdxf، psd-tools، Ghostscript) لا يمكن تشغيلها داخل المتصفح. أدوات
-          PDF الأخرى في المحطة ما زالت تعمل داخل جهازك بالكامل دون رفع أي شيء.
+          <b>لماذا يحتاج التحويل إلى خادم؟</b> قراءة صيغ مثل DXF وPSD وDWG تتطلب محركات
+          تحليل متخصصة (ezdxf، psd-tools، Ghostscript) لا يمكن تشغيلها داخل المتصفح. بقية
+          أدوات محوّل PDF تعمل داخل جهازك بالكامل دون رفع أي شيء.
         </p>
       </div>
     </div>

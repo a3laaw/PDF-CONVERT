@@ -4,6 +4,7 @@
 import { PDFDocument, degrees, rgb, StandardFonts } from "pdf-lib";
 import { toHindiDigits } from "./arabic";
 import { parsePageRanges } from "./interpreter";
+import { resultName } from "./naming";
 import type { ResultFile } from "./types";
 
 /* ─────────── أدوات داخلية ─────────── */
@@ -148,7 +149,7 @@ async function opMerge(inputs: EngineInput[], label: string, ctx: RunContext): P
     pages.forEach((p) => out.addPage(p));
   }
   const bytes = await out.save({ useObjectStreams: true });
-  return [resultFile("الملف-المدموج.pdf", bytes, label, "pdf")];
+  return [resultFile(resultName("merge", inputs[0].name), bytes, label, "pdf")];
 }
 
 /* تصغير الحجم — ثلاثة مستويات بذكاء:
@@ -211,7 +212,7 @@ async function opCompress(
         p.drawImage(img, { x: 0, y: 0, width: p.getWidth(), height: p.getHeight() });
       }
       const saved = await out.save({ useObjectStreams: true });
-      results.push(resultFile("بعد-تصغير-الحجم.pdf", saved, label, "pdf"));
+      results.push(resultFile(resultName("compress", input.name), saved, label, "pdf"));
     } else {
       // ملف نصي: ضغط الهيكل + تنظيف البيانات في المتوسط والقوي
       const doc = await loadPdfLib(bytes);
@@ -222,7 +223,7 @@ async function opCompress(
         doc.setKeywords([]);
       }
       const saved = await doc.save({ useObjectStreams: true });
-      results.push(resultFile("بعد-تصغير-الحجم.pdf", saved, label, "pdf"));
+      results.push(resultFile(resultName("compress", input.name), saved, label, "pdf"));
     }
   }
   return results;
@@ -255,9 +256,7 @@ async function opExtractOrDelete(
     const copied = await out.copyPages(src, keep);
     copied.forEach((p) => out.addPage(p));
     const saved = await out.save({ useObjectStreams: true });
-    results.push(
-      resultFile(mode === "extract" ? "الصفحات-المستخرجة.pdf" : "بعد-حذف-الصفحات.pdf", saved, label, "pdf")
-    );
+    results.push(resultFile(resultName(mode, input.name), saved, label, "pdf"));
   }
   return results;
 }
@@ -282,7 +281,7 @@ async function opRotate(
       page.setRotation(degrees((current + angle) % 360));
     });
     const saved = await doc.save({ useObjectStreams: true });
-    results.push(resultFile("بعد-التدوير.pdf", saved, label, "pdf"));
+    results.push(resultFile(resultName("rotate", input.name), saved, label, "pdf"));
   }
   return results;
 }
@@ -309,7 +308,7 @@ async function opReorder(
     const copied = await out.copyPages(src, order.map((p) => p - 1));
     copied.forEach((p) => out.addPage(p));
     const saved = await out.save({ useObjectStreams: true });
-    results.push(resultFile("بعد-الترتيب.pdf", saved, label, "pdf"));
+    results.push(resultFile(resultName("reorder", input.name), saved, label, "pdf"));
   }
   return results;
 }
@@ -317,19 +316,17 @@ async function opReorder(
 /* فصل كل صفحة */
 async function opSplit(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {
   const results: ResultFile[] = [];
-  const prefix = inputs.length > 1; // عدة ملفات معًا → نسبق الأسماء ب اسم الملف لتفادي التكرار
   for (const input of inputs) {
     ctx.onProgress?.(`جارٍ فصل صفحات «${input.name}»…`);
     const src = await loadPdfLib(await bytesOf(input));
     const total = src.getPageCount();
-    const base = prefix ? input.name.replace(/\.pdf$/i, "") + "-" : "";
     for (let i = 0; i < total; i++) {
       ctx.onProgress?.(`فصل «${input.name}»: الصفحة ${toHindiDigits(i + 1)} من ${toHindiDigits(total)}`);
       const out = await PDFDocument.create();
       const [page] = await out.copyPages(src, [i]);
       out.addPage(page);
       const saved = await out.save({ useObjectStreams: true });
-      results.push(resultFile(`${base}صفحة-${toHindiDigits(i + 1)}.pdf`, saved, label, "pdf"));
+      results.push(resultFile(resultName("split", input.name, i), saved, label, "pdf"));
     }
   }
   return results;
@@ -371,7 +368,7 @@ async function opWatermark(
       });
     }
     const saved = await doc.save({ useObjectStreams: true });
-    results.push(resultFile("بعد-الختم.pdf", saved, label, "pdf"));
+    results.push(resultFile(resultName("watermark", input.name), saved, label, "pdf"));
   }
   return results;
 }
@@ -407,7 +404,7 @@ async function opPageNumbers(
       });
     }
     const saved = await doc.save({ useObjectStreams: true });
-    results.push(resultFile("بعد-الترقيم.pdf", saved, label, "pdf"));
+    results.push(resultFile(resultName("page_numbers", input.name), saved, label, "pdf"));
   }
   return results;
 }
@@ -445,7 +442,7 @@ async function opImagesToPdf(
     }
   }
   const saved = await out.save({ useObjectStreams: true });
-  return [resultFile("من-الصور.pdf", saved, label, "pdf")];
+  return [resultFile(resultName("images_to_pdf", inputs[0].name), saved, label, "pdf")];
 }
 
 /* PDF إلى صور */
@@ -479,7 +476,7 @@ async function opPdfToImages(
         canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("تعذر إنشاء الصورة"))), mime, 0.9)
       );
       const ext = format === "jpeg" ? "jpg" : "png";
-      results.push(resultFile(`${input.name.replace(/\.pdf$/i, "")}-صفحة-${i}.${ext}`, blob, label, "image"));
+      results.push(resultFile(resultName("pdf_to_images", input.name, i - 1, "." + ext), blob, label, "image"));
     }
   }
   return results;
@@ -506,7 +503,7 @@ async function opExtractText(inputs: EngineInput[], label: string, ctx: RunConte
     }
     const text = chunks.join("\n\n");
     const blob = new Blob(["\ufeff" + text], { type: "text/plain;charset=utf-8" });
-    results.push(resultFile("نص-الملف.txt", blob, label, "other"));
+    results.push(resultFile(resultName("extract_text", input.name), blob, label, "other"));
   }
   return results;
 }
@@ -525,9 +522,9 @@ async function opMetadata(
     if (params.title) doc.setTitle(params.title);
     if (params.author) doc.setAuthor(params.author);
     doc.setModificationDate(new Date());
-    doc.setProducer("محطّة PDF");
+    doc.setProducer("محوّل PDF");
     const saved = await doc.save({ useObjectStreams: true });
-    results.push(resultFile("بعد-تعديل-البيانات.pdf", saved, label, "pdf"));
+    results.push(resultFile(resultName("metadata", input.name), saved, label, "pdf"));
   }
   return results;
 }
@@ -560,7 +557,7 @@ async function opNup(
       });
     }
     const saved = await out.save({ useObjectStreams: true });
-    results.push(resultFile("صفحتان-في-الورقة.pdf", saved, label, "pdf"));
+    results.push(resultFile(resultName("nup", input.name), saved, label, "pdf"));
   }
   return results;
 }

@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { nanoid } from "@/lib/nanoid";
 import { toHindiDigits } from "@/lib/arabic";
 import { inspectImage, inspectPdf, runOp, zipResults } from "@/lib/pdf-engine";
+import { uniqueName } from "@/lib/naming";
 import { stepLabel } from "@/lib/interpreter";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import type {
@@ -66,6 +67,8 @@ interface WorkspaceState {
   setSuggestions: (s: WorkspaceState["suggestions"]) => void;
 
   run: () => Promise<void>;
+  runOnFiles: (op: OpId, params: Record<string, string>, fileIds: string[]) => Promise<void>;
+  renameResult: (id: string, name: string) => void;
   clearResults: () => void;
   downloadAll: () => Promise<void>;
 
@@ -272,12 +275,48 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ results: [], runState: "idle", runMessage: "", runProgress: 0 });
   },
 
+  /* تنفيذ أداة واحدة مباشرة على ملفات محددة — بدون خطوات أو أوامر نصية */
+  runOnFiles: async (op, params, fileIds) => {
+    const tool = TOOLS_BY_ID[op];
+    const chosen = get().files.filter((f) => fileIds.includes(f.id) && tool.accepts.includes(f.kind));
+    if (chosen.length === 0) {
+      const need = tool.accepts.includes("image") ? "صور" : "ملفات PDF";
+      set({
+        runState: "error",
+        runMessage: `هذه الأداة تحتاج ${need} — حدّد الملفات المناسبة أولًا`,
+      });
+      return;
+    }
+    const inputs = chosen.map((f) => ({ id: f.id, name: f.name, kind: f.kind, file: f.file }));
+    set({ runState: "running", runProgress: 0.1, results: [], runMessage: `جارٍ «${tool.name}»…` });
+    try {
+      const outs = await runOp(op, inputs, params, tool.name, {
+        onProgress: (msg) =>
+          set((s) => ({ runMessage: msg, runProgress: Math.min(0.9, s.runProgress + 0.08) })),
+      });
+      const taken = new Set<string>();
+      const final = outs.map((r) => ({ ...r, name: uniqueName(r.name, taken) }));
+      set({
+        results: final,
+        runState: "done",
+        runMessage: `تم! ${toHindiDigits(final.length)} ${final.length === 1 ? "ملف جاهز" : "ملفات جاهزة"}`,
+        runProgress: 1,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "حدث خطأ غير متوقع أثناء التنفيذ";
+      set({ runState: "error", runMessage: msg });
+    }
+  },
+
+  renameResult: (id, name) =>
+    set((s) => ({ results: s.results.map((r) => (r.id === id ? { ...r, name } : r)) })),
+
   downloadAll: async () => {
     const { results } = get();
     if (results.length === 0) return;
     const blob = await zipResults(results);
     const { downloadBlob, openBlobInNewTab } = await import("@/lib/pdf-engine");
-    const embedded = downloadBlob(blob, "نتائج-محطة-PDF.zip");
+    const embedded = downloadBlob(blob, "الملفات-الجاهزة.zip");
     const { toast } = await import("sonner");
     if (embedded) {
       toast("بدأ تنزيل الأرشيف", {
