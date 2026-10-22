@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تصور الواجهة المقترحة — مِطبعة</title>
+<style>
+/*__TAJAWAL__*/
+:root{
+  --accent:#4F55E3; --accent-soft:#eef0fe; --accent-line:#c7cbfa;
+  --ink:#1e2438; --ink-2:#5a6178; --ink-3:#8b91a7;
+  --line:#e5e7f0; --bg:#eef0f6; --card:#ffffff; --ok:#0f9d6e; --ok-soft:#e7f7f0;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:"Tajawal",system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:28px 16px 60px}
+.wrap{max-width:1180px;margin:0 auto}
+
+/* رأس الصفحة */
+.pagehead{text-align:center;margin-bottom:34px}
+.pagehead h1{font-size:26px;font-weight:800}
+.pagehead p{color:var(--ink-2);margin-top:8px;font-size:14.5px}
+.badge{display:inline-block;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line);
+  border-radius:999px;padding:4px 14px;font-size:12.5px;font-weight:700;margin-bottom:12px}
+
+/* إطار كل لوحة */
+.board{margin:0 auto 46px}
+.board-title{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.board-title .n{width:30px;height:30px;border-radius:9px;background:var(--accent);color:#fff;font-weight:800;
+  display:grid;place-items:center;font-size:15px;flex-shrink:0}
+.board-title h2{font-size:17.5px;font-weight:800}
+.board-title span{color:var(--ink-3);font-size:13px;font-weight:500}
+.shot{background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 18px 40px -18px rgba(30,36,56,.18);
+  overflow:hidden}
+
+/* مكوّنات واجهة التطبيق داخل اللوحات */
+.app{display:flex;flex-direction:column;min-height:560px}
+.hdr{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line)}
+.logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#5b62f0,#3f45c9);color:#fff;
+  display:grid;place-items:center;font-size:19px;font-weight:800;flex-shrink:0}
+.hdr .brand{font-size:19px;font-weight:800;letter-spacing:.2px}
+.hdr .tag{color:var(--ink-3);font-size:12px;margin-right:2px;margin-top:2px}
+.hdr .sp{flex:1}
+.btn{border:0;border-radius:11px;padding:9px 16px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px}
+.btn-ghost{background:transparent;border:1.5px solid var(--line);color:var(--ink-2)}
+.btn-pri{background:var(--accent);color:#fff;box-shadow:0 6px 14px -6px rgba(79,85,227,.55)}
+.btn-pri:hover{filter:brightness(1.06)}
+.btn-ok{background:var(--ok);color:#fff}
+.btn-sm{padding:6px 12px;font-size:12.5px;border-radius:9px}
+
+/* شريط الأدوات */
+.tools{display:flex;align-items:center;gap:2px;padding:9px 14px;border-bottom:1px solid var(--line);
+  background:#fafbfe;overflow-x:auto}
+.tg{display:flex;align-items:center;gap:2px;padding:0 8px}
+.tg+.tg{border-right:1px solid var(--line);padding-right:14px;margin-right:6px}
+.tool{display:flex;flex-direction:column;align-items:center;gap:4px;border:0;background:transparent;border-radius:11px;
+  padding:7px 10px;font-family:inherit;font-size:11px;font-weight:700;color:var(--ink-2);cursor:pointer;min-width:58px;white-space:nowrap}
+.tool:hover{background:var(--accent-soft);color:var(--accent)}
+.tool svg{width:20px;height:20px}
+.tool.active{background:var(--accent-soft);color:var(--accent);outline:1.5px solid var(--accent-line)}
+.tmore{margin-right:auto}
+.dot3{font-size:18px;font-weight:800;color:var(--ink-3);padding:8px 12px}
+
+/* جسم شاشة العمل */
+.body{flex:1;display:flex;min-height:0}
+.rail{width:190px;border-left:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:8px;background:#fcfcff}
+.rail h4{font-size:12px;color:var(--ink-3);font-weight:700;margin-bottom:2px;padding:0 4px}
+.fchip{display:flex;align-items:center;gap:9px;border:1.5px solid var(--line);border-radius:12px;padding:9px 10px;
+  font-size:12.5px;font-weight:700;cursor:pointer;background:#fff}
+.fchip .ic{width:30px;height:30px;border-radius:8px;background:#fdeaea;color:#d64545;display:grid;place-items:center;
+  font-size:10px;font-weight:800;flex-shrink:0}
+.fchip.on{border-color:var(--accent);background:var(--accent-soft)}
+.fchip .meta{color:var(--ink-3);font-size:10.5px;font-weight:500}
+.fchip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px}
+.fchip.add{border-style:dashed;color:var(--ink-3);justify-content:center;font-size:12px;background:transparent}
+
+/* معاينة الصفحات */
+.thumbs{width:118px;border-left:1px solid var(--line);padding:12px 10px;display:flex;flex-direction:column;gap:9px;
+  align-items:center;background:#fcfcff;overflow-y:auto}
+.thumbs h4{font-size:12px;color:var(--ink-3);font-weight:700;align-self:flex-start;padding:0 4px}
+.thumb{position:relative;width:76px;background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:6px 7px;cursor:pointer}
+.thumb .mini{height:74px;border-radius:4px;background:
+  repeating-linear-gradient(#fff 0 7px,#e9ebf2 7px 8px);display:flex;flex-direction:column;gap:3px;justify-content:center;
+  padding:6px;border:1px solid #f0f1f6}
+.thumb .mini i{display:block;height:3px;border-radius:2px;background:#d7dbe7}
+.thumb .mini i.hl{background:var(--accent);opacity:.65;width:60%!important}
+.thumb .pg{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:7px;background:#fff;
+  border:1.5px solid var(--line);font-size:10px;font-weight:800;color:var(--ink-2);display:grid;place-items:center}
+.thumb.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.thumb.on .pg{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* لوحة المعاينة الكبيرة */
+.stage{flex:1;display:flex;flex-direction:column;align-items:center;padding:18px;background:#f6f7fb;position:relative}
+.pageview{width:min(430px,86%);aspect-ratio:1/1.34;background:#fff;border-radius:6px;box-shadow:0 10px 28px -10px rgba(30,36,56,.28);
+  padding:34px 30px;display:flex;flex-direction:column;gap:9px}
+.pageview .t{height:13px;width:52%;border-radius:4px;background:#2c3350;margin-bottom:8px}
+.pageview i{display:block;height:5.5px;border-radius:3px;background:#dfe2ec}
+.pageview i.s{width:72%}
+.pageview i.xs{width:45%}
+.pageview .box{margin-top:10px;height:96px;border:1.5px dashed #c9cede;border-radius:8px;display:grid;place-items:center;
+  color:#9aa1b8;font-size:11px;font-weight:700}
+.pageview .foot{margin-top:auto;display:flex;justify-content:space-between;align-items:center}
+.pageview .foot b{height:7px;width:88px;border-radius:4px;background:#c3c8d9}
+.pageview .foot span{font-size:10px;color:#aab0c4;font-weight:700}
+.stagebar{margin-top:14px;display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);
+  border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:700;color:var(--ink-2)}
+.stagebar .zi{width:26px;height:26px;border-radius:8px;border:1.5px solid var(--line);display:grid;place-items:center;
+  font-weight:800;color:var(--ink-2);cursor:pointer;background:#fff}
+
+/* نافذة خيارات الأداة المنبثقة */
+.pop{position:absolute;top:64px;right:26px;width:230px;background:#fff;border:1px solid var(--line);border-radius:15px;
+  box-shadow:0 18px 44px -12px rgba(30,36,56,.3);padding:13px;z-index:5}
+.pop h5{font-size:13px;font-weight:800;margin-bottom:9px;display:flex;align-items:center;gap:7px}
+.pop h5 svg{width:15px;height:15px;color:var(--accent)}
+.opt{display:flex;align-items:center;justify-content:space-between;border:1.5px solid var(--line);border-radius:10px;
+  padding:8px 11px;font-size:12px;font-weight:700;margin-bottom:6px;cursor:pointer}
+.opt.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.opt span{color:var(--ink-3);font-weight:500;font-size:10.5px}
+.opt.on span{color:var(--accent)}
+.pop .btn{width:100%;justify-content:center;margin-top:4px}
+
+/* شريط الحالة السفلي */
+.statusbar{display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--line);background:#fff}
+.statusbar .sel{font-size:12.5px;font-weight:700;color:var(--ink-2);background:var(--accent-soft);color:var(--accent);
+  border-radius:999px;padding:5px 13px}
+.statusbar .sp{flex:1}
+
+/* لوحة ٣ — النتائج */
+.resultwrap{position:relative}
+.resultwrap .dim{position:absolute;inset:0;background:rgba(250,251,254,.55);backdrop-filter:blur(1px)}
+.sheet{position:relative;margin:34px 22px 22px;background:#fff;border:1.5px solid var(--ok);border-radius:18px;
+  box-shadow:0 -8px 40px -12px rgba(15,157,110,.25);padding:16px}
+.sheet h3{display:flex;align-items:center;gap:9px;font-size:15.5px;font-weight:800;color:var(--ok)}
+.sheet h3 .ck{width:26px;height:26px;border-radius:9px;background:var(--ok);color:#fff;display:grid;place-items:center}
+.rcard{display:flex;align-items:center;gap:12px;border:1.5px solid var(--line);border-radius:13px;padding:11px 13px;margin-top:10px}
+.rcard .ic{width:38px;height:38px;border-radius:10px;background:#fdeaea;color:#d64545;display:grid;place-items:center;
+  font-size:10px;font-weight:800;flex-shrink:0}
+.rcard .ic.zip{background:#fff4e2;color:#d9862a}
+.rcard .nm{font-size:13.5px;font-weight:800;direction:rtl}
+.rcard .meta{font-size:11px;color:var(--ink-3);font-weight:500;margin-top:2px}
+.rcard .chip{font-size:10.5px;font-weight:800;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:3px 10px;margin-right:6px}
+.rcard .sp{flex:1}
+
+/* جداول الأقسام السفلية */
+.sec{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px;margin-bottom:26px;
+  box-shadow:0 10px 30px -18px rgba(30,36,56,.15)}
+.sec h2{font-size:17px;font-weight:800;margin-bottom:4px}
+.sec>p{color:var(--ink-2);font-size:13px;margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:right;color:var(--ink-3);font-size:11.5px;font-weight:700;padding:8px 10px;border-bottom:2px solid var(--line)}
+td{padding:9px 10px;border-bottom:1px solid var(--line);font-weight:600}
+td code{background:#f4f5fa;border:1px solid var(--line);border-radius:7px;padding:2px 9px;font-size:12px;font-weight:700;
+  color:var(--ink);direction:rtl;display:inline-block}
+td .op{display:inline-flex;align-items:center;gap:7px;color:var(--ink-2);font-weight:700;font-size:12.5px}
+td .op svg{width:15px;height:15px}
+tr:last-child td{border-bottom:0}
+
+/* بدائل الاسم */
+.names{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.namecard{border:1.5px solid var(--line);border-radius:16px;padding:18px;text-align:center;cursor:pointer;position:relative}
+.namecard.rec{border-color:var(--accent);background:var(--accent-soft)}
+.namecard .rec-tag{position:absolute;top:-11px;right:14px;background:var(--accent);color:#fff;font-size:10.5px;
+  font-weight:800;border-radius:999px;padding:3px 11px}
+.namecard .lg{width:46px;height:46px;border-radius:13px;background:linear-gradient(135deg,#5b62f0,#3f45c9);color:#fff;
+  display:grid;place-items:center;font-size:22px;font-weight:800;margin:0 auto 10px}
+.namecard h3{font-size:17px;font-weight:800}
+.namecard p{color:var(--ink-2);font-size:12px;margin-top:6px;line-height:1.7}
+.note{background:var(--ok-soft);border:1px solid #bfe8d6;border-radius:14px;padding:13px 16px;font-size:13px;
+  color:#0b6b4b;font-weight:600;display:flex;gap:9px;align-items:flex-start;margin-top:26px}
+.note b{flex-shrink:0}
+@media (max-width:900px){.names{grid-template-columns:1fr}.thumbs{display:none}.rail{width:150px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="pagehead">
+    <span class="badge">تصور مقترح — قابل للتعديل قبل التنفيذ</span>
+    <h1>الشكل الجديد: عرض الملف + شريط أدوات واحد</h1>
+    <p>ثلاث شاشات: البداية ← العمل ← النتيجة — مع هوية عربية أوضح ونظام تسمية ملفات يحفظ اسم ملفك الأصلي</p>
+  </div>
+
+  <!-- ═══════════ لوحة ١: البداية ═══════════ -->
+  <div class="board">
+    <div class="board-title"><span class="n">١</span><h2>شاشة البداية</h2><span>بلا تجميعات — رسالة واحدة ومنطقة إفلات واحدة</span></div>
+    <div class="shot">
+      <div class="app" style="min-height:380px">
+        <div class="hdr">
+          <div class="logo">م</div>
+          <div><div class="brand">مِطبعة</div><div class="tag">كل أدوات ملفاتك — بالعربي، وملفاتك لا تغادر جهازك</div></div>
+          <div class="sp"></div>
+          <button class="btn btn-ghost btn-sm">كيف تعمل؟</button>
+        </div>
+        <div class="stage" style="justify-content:center">
+          <div style="width:min(560px,90%);border:2px dashed var(--accent-line);background:var(--accent-soft);border-radius:22px;padding:44px 24px;text-align:center">
+            <div style="width:64px;height:64px;border-radius:18px;background:var(--accent);color:#fff;display:grid;place-items:center;margin:0 auto 14px;font-size:28px;font-weight:800">↑</div>
+            <div style="font-size:19px;font-weight:800">اسحب ملفاتك هنا أو اضغط للاختيار</div>
+            <div style="color:var(--ink-2);font-size:13px;margin-top:8px;font-weight:600">PDF أو صور — وبعدها يظهر العرض وشريط الأدوات مباشرة</div>
+            <button class="btn btn-pri" style="margin-top:18px">اختيار ملفات</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ لوحة ٢: شاشة العمل ═══════════ -->
+  <div class="board">
+    <div class="board-title"><span class="n">٢</span><h2>شاشة العمل</h2><span>عرض الملف في المنتصف + شريط أدوات واحد + تحديد بالضغط</span></div>
+    <div class="shot">
+      <div class="app">
+        <div class="hdr">
+          <div class="logo">م</div>
+          <div><div class="brand">مِطبعة</div><div class="tag">ملفاتك لا تغادر جهازك</div></div>
+          <div class="sp"></div>
+          <button class="btn btn-ghost btn-sm">+ ملف جديد</button>
+        </div>
+
+        <div class="tools">
+          <div class="tg">
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>دمج</button>
+          </div>
+          <div class="tg">
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="2.5"/><circle cx="7" cy="17" r="2.5"/><path d="M9 8.5 20 19M9 15.5 20 5"/></svg>فصل</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>استخراج</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg>حذف</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>تدوير</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6v12M8 6 5 9M8 6l3 3M16 18V6M16 18l-3-3M16 18l3-3"/></svg>ترتيب</button>
+          </div>
+          <div class="tg">
+            <button class="tool active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9h16M4 15h10M9 4l-4 5 4 5"/></svg>تصغير</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>ترقيم</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3s5 4.5 5 9a5 5 0 0 1-10 0c0-4.5 5-9 5-9Z"/><path d="M5 21h14"/></svg>ختم</button>
+          </div>
+          <div class="tg">
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4-4-8 8"/></svg>إلى صور</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15l4-4 4 4 5-6 5 6"/></svg>من صور</button>
+            <button class="tool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 3 8.5 12 14l9-5.5L12 3Z"/><path d="M3 8.5V16l9 5.5M21 8.5V16l-9 5.5"/></svg>CAD وأدوبي</button>
+          </div>
+          <div class="dot3 tmore">•••</div>
+        </div>
+
+        <div class="body">
+          <div class="rail">
+            <h4>الملفات</h4>
+            <div class="fchip on"><span class="ic">PDF</span><span><span class="nm">تقرير-المشروع.pdf</span><br><span class="meta">٥ صفحات · ٢٫٤ م.ب</span></span></div>
+            <div class="fchip"><span class="ic">PDF</span><span><span class="nm">فاتورة-يناير.pdf</span><br><span class="meta">صفحتان · 340 ك.ب</span></span></div>
+            <div class="fchip add">+ إضافة ملف</div>
+          </div>
+
+          <div class="thumbs">
+            <h4>الصفحات</h4>
+            <div class="thumb"><span class="pg">١</span><div class="mini"><i style="width:55%"></i><i></i><i></i><i class="hl"></i><i></i><i style="width:70%"></i><i></i></div></div>
+            <div class="thumb on"><span class="pg">✓</span><div class="mini"><i></i><i style="width:65%"></i><i class="hl"></i><i></i><i></i><i style="width:50%"></i><i></i></div></div>
+            <div class="thumb"><span class="pg">٣</span><div class="mini"><i style="width:60%"></i><i></i><i></i><i style="width:75%"></i><i></i><i></i></div></div>
+            <div class="thumb"><span class="pg">٤</span><div class="mini"><i></i><i style="width:70%"></i><i></i><i></i><i class="hl"></i><i style="width:60%"></i></div></div>
+            <div class="thumb"><span class="pg">٥</span><div class="mini"><i style="width:50%"></i><i></i><i style="width:80%"></i><i></i><i></i><i style="width:65%"></i></div></div>
+          </div>
+
+          <div class="stage">
+            <div class="pageview">
+              <div class="t"></div>
+              <i></i><i></i><i class="s"></i><i></i><i class="xs"></i><i></i><i class="s"></i>
+              <div class="box">رسم توضيحي / مخطط</div>
+              <i></i><i class="s"></i><i class="xs"></i>
+              <div class="foot"><b></b><span>تقرير-المشروع.pdf — صفحة ٢ من ٥</span></div>
+            </div>
+            <div class="stagebar">
+              <span class="zi">−</span><span>١١٠٪</span><span class="zi">+</span>
+              <span style="color:var(--line)">|</span>
+              <span>اضغط على الصفحات لتحديدها</span>
+            </div>
+
+            <div class="pop">
+              <h5><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h10M9 4l-4 5 4 5"/></svg>تصغير الحجم</h5>
+              <div class="opt on">عادية <span>جودة ممتازة</span></div>
+              <div class="opt">عالية <span>حجم أصغر</span></div>
+              <div class="opt">قصوى <span>أصغر حجم</span></div>
+              <button class="btn btn-pri btn-sm">تطبيق على صفحتين</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="sel">صفحتان محددتان من ٥</span>
+          <button class="btn btn-ghost btn-sm">إلغاء التحديد</button>
+          <div class="sp"></div>
+          <span style="font-size:12px;color:var(--ink-3);font-weight:600">النتيجة ستُحفظ باسم: <b style="color:var(--ink)">تقرير-المشروع-مصغر.pdf</b></span>
+          <button class="btn btn-pri btn-sm">نفّذ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ لوحة ٣: النتيجة والتسمية ═══════════ -->
+  <div class="board resultwrap">
+    <div class="board-title"><span class="n">٣</span><h2>شاشة النتيجة</h2><span>نفس اسم ملفك الأصلي + كلمة توضح العملية</span></div>
+    <div class="shot" style="background:#f6f7fb">
+      <div style="height:120px;overflow:hidden;filter:grayscale(12%);opacity:.5">
+        <div class="hdr" style="border-radius:0"><div class="logo">م</div><div><div class="brand">مِطبعة</div></div><div class="sp"></div></div>
+        <div class="tools"></div>
+      </div>
+      <div class="sheet">
+        <h3><span class="ck">✓</span>النتائج جاهزة — ٣ ملفات</h3>
+        <div class="rcard">
+          <span class="ic">PDF</span>
+          <span><span class="nm">تقرير-المشروع-مصغر.pdf</span><br><span class="meta">٤٨٠ ك.ب — بدلًا من ٢٫٤ م.ب <span class="chip">مصغر</span></span></span>
+          <span class="sp"></span>
+          <button class="btn btn-ghost btn-sm">فتح</button>
+          <button class="btn btn-ok btn-sm">تحميل</button>
+        </div>
+        <div class="rcard">
+          <span class="ic zip">ZIP</span>
+          <span><span class="nm">تقرير-المشروع-مفصول-صفحات.zip</span><br><span class="meta">٥ ملفات، صفحة لكل ملف <span class="chip">مفصول صفحات</span></span></span>
+          <span class="sp"></span>
+          <button class="btn btn-ghost btn-sm">فتح</button>
+          <button class="btn btn-ok btn-sm">تحميل</button>
+        </div>
+        <div class="rcard">
+          <span class="ic">PDF</span>
+          <span><span class="nm">تقرير-المشروع-مدمج.pdf</span><br><span class="meta">٧ صفحات — تقرير-المشروع + فاتورة-يناير <span class="chip">مدمج</span></span></span>
+          <span class="sp"></span>
+          <button class="btn btn-ghost btn-sm">فتح</button>
+          <button class="btn btn-ok btn-sm">تحميل</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ نظام التسمية ═══════════ -->
+  <div class="sec">
+    <h2>نظام تسمية الملفات المنزّلة</h2>
+    <p>القاعدة: نفس اسم ملفك المرفوع + كلمة عربية واحدة توضح العملية — لا أسماء غريبة أو مشفرة</p>
+    <table>
+      <tr><th>العملية</th><th>مثال الملف المرفوع</th><th>الاسم الناتج</th></tr>
+      <tr><td><span class="op">تصغير الحجم</span></td><td><code>تقرير-المشروع.pdf</code></td><td><code>تقرير-المشروع-مصغر.pdf</code></td></tr>
+      <tr><td><span class="op">دمج عدة ملفات</span></td><td><code>تقرير-المشروع.pdf + فاتورة-يناير.pdf</code></td><td><code>تقرير-المشروع-مدمج.pdf</code></td></tr>
+      <tr><td><span class="op">فصل كل صفحة</span></td><td><code>تقرير-المشروع.pdf</code></td><td><code>تقرير-المشروع-مفصول-صفحات.zip</code> (داخله: صفحة-١ …)</td></tr>
+      <tr><td><span class="op">تدوير</span></td><td><code>تقرير-المشروع.pdf</code></td><td><code>تقرير-المشروع-مدوّر.pdf</code></td></tr>
+      <tr><td><span class="op">ترقيم الصفحات</span></td><td><code>تقرير-المشروع.pdf</code></td><td><code>تقرير-المشروع-مرقّم.pdf</code></td></tr>
+      <tr><td><span class="op">ختم</span></td><td><code>تقرير-المشروع.pdf</code></td><td><code>تقرير-المشروع-مختوم.pdf</code></td></tr>
+      <tr><td><span class="op">صور إلى PDF</span></td><td><code>صور-الرحلة.jpg</code></td><td><code>صور-الرحلة.pdf</code></td></tr>
+      <tr><td><span class="op">PDF إلى صور</span></td><td><code>تقرير-المشروع.pdf</code></td><td><code>تقرير-المشروع-صور.zip</code></td></tr>
+      <tr><td><span class="op">إعادة تسمية</span></td><td><code>تقرير-المشروع.pdf</code></td><td><code>الاسم الذي تكتبه بنفسك</code></td></tr>
+    </table>
+  </div>
+
+  <!-- ═══════════ بدائل الاسم ═══════════ -->
+  <div class="sec">
+    <h2>اسم العلامة — اقتراحات أكثر إحساسًا بالعربية</h2>
+    <p>اخترت لك الثلاثة أدناه — اضغط اللي يعجبك وسيكون هو الاسم المعتمد في التطبيق</p>
+    <div class="names">
+      <div class="namecard rec">
+        <span class="rec-tag">المقترح الرئيسي</span>
+        <div class="lg">م</div>
+        <h3>مِطبعة</h3>
+        <p>«كل أدوات ملفاتك في مِطبعة واحدة» — قصير، عربي أصيل، ومعروف لكل مستخدم: المكان اللي يجهّز أوراقك</p>
+      </div>
+      <div class="namecard">
+        <div class="lg" style="background:linear-gradient(135deg,#0f9d6e,#0a7a55)">م</div>
+        <h3>مِلَفّي</h3>
+        <p>«ملفّي — أرتب و أصغّر و أحوّل» — إحساس شخصي: الملف yours، مناسب جدًا لو التطبيق شخصي/مكتبي</p>
+      </div>
+      <div class="namecard">
+        <div class="lg" style="background:linear-gradient(135deg,#d9862a,#b5691a)">و</div>
+        <h3>وَرَقة</h3>
+        <p>«ورقة واحدة تكفي» — خفيف وودود، يوحي بالصفحة نفسها، مميز جدًا كاسم تجاري عربي</p>
+      </div>
+    </div>
+    <div class="note">
+      <b>ملاحظة:</b>
+      <span>هذا تصور بصري فقط — لم أغيّر شيئًا في التطبيق الحالي بعد. راجع الشكل ونظام التسمية والاسم، وقل لي تعديلاتك، وبعد اعتمادك أنفّذه في التطبيق الفعلي خطوة بخطوة مع اختبار حقيقي لكل ميزة.</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
