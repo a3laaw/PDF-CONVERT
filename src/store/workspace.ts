@@ -85,6 +85,39 @@ function detectKind(name: string): FileKind {
   return "other";
 }
 
+/* فحص المحتوى الحقيقي (التوقيع الرقمي) أولًا — الاسم مجرد احتياط
+   حتى لو غيّر أحد الامتداد يبقى النظام عارف نوع الملف فعلًا */
+async function sniffKind(file: File): Promise<FileKind> {
+  try {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    if (head.length >= 4) {
+      // %PDF-
+      if (head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) return "pdf";
+      // ‰PNG
+      if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) return "image";
+      // JPEG ÿØÿ
+      if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image";
+      // GIF8
+      if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38) return "image";
+      // BMP = BM
+      if (head[0] === 0x42 && head[1] === 0x4d && (head[2] ?? 255) !== 0) return "image";
+      // DWG = AC1xx (نسخ الأوتوكاد كلها تبدأ بـ AC ورقم)
+      if (head[0] === 0x41 && head[1] === 0x43 && head[2] >= 0x30 && head[2] <= 0x39) return "cad";
+      if (head.length >= 12) {
+        // RIFF....WEBP
+        if (
+          head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46 &&
+          head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42 && head[11] === 0x50
+        )
+          return "image";
+      }
+    }
+  } catch {
+    /* تعذّر القراءة — نرجع للاسم */
+  }
+  return detectKind(file.name);
+}
+
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   files: [],
   steps: [],
@@ -99,7 +132,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   addFiles: async (list) => {
     for (const file of list) {
-      const kind = detectKind(file.name);
+      const kind = await sniffKind(file);
       const wf: WorkspaceFile = {
         id: nanoid(),
         file,

@@ -1,0 +1,649 @@
+     1→"use client";
+     2→
+     3→/* شاشة العمل الجديدة — عرض الملف + شريط أدوات واحد، بدون أوامر نصية ولا شرح */
+     4→
+     5→import { useEffect, useMemo, useRef, useState } from "react";
+     6→import { Check, Pencil, Plus, X } from "lucide-react";
+     7→import { useWorkspace } from "@/store/workspace";
+     8→import { TOOLS_BY_ID } from "@/lib/tools-catalog";
+     9→import { resultName } from "@/lib/naming";
+    10→import { downloadBlob, openBlobInNewTab, pdfPageThumbs } from "@/lib/pdf-engine";
+    11→import { toHindiDigits } from "@/lib/arabic";
+    12→import { toast } from "sonner";
+    13→import type { OpId, ResultFile } from "@/lib/types";
+    14→import { Button } from "@/components/ui/button";
+    15→import { cn } from "@/lib/utils";
+    16→
+    17→/* ─────────── أيقونات الأدوات ─────────── */
+    18→const svg = (paths: React.ReactNode) => (
+    19→  <svg
+    20→    viewBox="0 0 24 24"
+    21→    fill="none"
+    22→    stroke="currentColor"
+    23→    strokeWidth={1.8}
+    24→    strokeLinecap="round"
+    25→    strokeLinejoin="round"
+    26→    className="size-5"
+    27→    aria-hidden
+    28→  >
+    29→    {paths}
+    30→  </svg>
+    31→);
+    32→
+    33→const TOOL_ICONS: Record<string, React.ReactNode> = {
+    34→  convert: svg(<path d="M4 7h13l-3-3M20 17H7l3 3" />),
+    35→  compress: svg(<path d="M4 9h16M4 15h10M9 4l-4 5 4 5" />),
+    36→  merge: svg(
+    37→    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+    38→  ),
+    39→  split: svg(
+    40→    <>
+    41→      <circle cx="7" cy="7" r="2.5" />
+    42→      <circle cx="7" cy="17" r="2.5" />
+    43→      <path d="M9 8.5 20 19M9 15.5 20 5" />
+    44→    </>
+    45→  ),
+    46→  extract: svg(
+    47→    <>
+    48→      <rect x="4" y="3" width="16" height="18" rx="2" />
+    49→      <path d="M8 8h8M8 12h8M8 16h5" />
+    50→    </>
+    51→  ),
+    52→  delete: svg(
+    53→    <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+    54→  ),
+    55→  rotate: svg(<path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6" />),
+    56→  reorder: svg(<path d="M8 6v12M8 6 5 9M8 6l3 3M16 18V6M16 18l-3-3M16 18l3-3" />),
+    57→  page_numbers: svg(<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" />),
+    58→  watermark: svg(
+    59→    <>
+    60→      <path d="M12 3s5 4.5 5 9a5 5 0 0 1-10 0c0-4.5 5-9 5-9Z" />
+    61→      <path d="M5 21h14" />
+    62→    </>
+    63→  ),
+    64→  remove_watermark: svg(
+    65→    <>
+    66→      <path d="m7 21-4.3-4.3a2.4 2.4 0 0 1 0-3.4l9.6-9.6a2.4 2.4 0 0 1 3.4 0l5.6 5.6a2.4 2.4 0 0 1 0 3.4L13 21" />
+    67→      <path d="M22 21H7" />
+    68→      <path d="m5 11 9 9" />
+    69→    </>
+    70→  ),
+    71→  pdf_to_images: svg(
+    72→    <>
+    73→      <rect x="3" y="3" width="18" height="18" rx="2" />
+    74→      <circle cx="9" cy="9" r="2" />
+    75→      <path d="m21 15-4-4-8 8" />
+    76→    </>
+    77→  ),
+    78→  images_to_pdf: svg(
+    79→    <>
+    80→      <rect x="3" y="5" width="18" height="14" rx="2" />
+    81→      <path d="M3 15l4-4 4 4 5-6 5 6" />
+    82→    </>
+    83→  ),
+    84→  extract_text: svg(
+    85→    <>
+    86→      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
+    87→      <path d="M14 3v6h6M9 13h6M9 17h4" />
+    88→    </>
+    89→  ),
+    90→};
+    91→
+    92→const TOOLBAR: { id: OpId | "convert"; label: string }[] = [
+    93→  { id: "convert", label: "تحويل" },
+    94→  { id: "compress", label: "تصغير" },
+    95→  { id: "merge", label: "دمج" },
+    96→  { id: "split", label: "فصل" },
+    97→  { id: "extract", label: "استخراج" },
+    98→  { id: "delete", label: "حذف" },
+    99→  { id: "rotate", label: "تدوير" },
+   100→  { id: "reorder", label: "ترتيب" },
+   101→  { id: "page_numbers", label: "ترقيم" },
+   102→  { id: "watermark", label: "ختم" },
+   103→  { id: "remove_watermark", label: "بدون علامة" },
+   104→  { id: "pdf_to_images", label: "لصور" },
+   105→  { id: "images_to_pdf", label: "من صور" },
+   106→  { id: "extract_text", label: "نص" },
+   107→];
+   108→
+   109→/* ─────────── أدوات مساعدة ─────────── */
+   110→
+   111→async function renderPageDataUrl(file: File, pageNo: number, maxW = 820): Promise<string> {
+   112→  const pdfjs = await import("pdfjs-dist");
+   113→  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+   114→  const bytes = new Uint8Array(await file.arrayBuffer());
+   115→  const doc = await pdfjs.getDocument({ data: bytes }).promise;
+   116→  const page = await doc.getPage(Math.max(1, pageNo));
+   117→  const v1 = page.getViewport({ scale: 1 });
+   118→  const viewport = page.getViewport({ scale: Math.min(1.8, maxW / v1.width) });
+   119→  const canvas = document.createElement("canvas");
+   120→  canvas.width = Math.floor(viewport.width);
+   121→  canvas.height = Math.floor(viewport.height);
+   122→  const c2 = canvas.getContext("2d")!;
+   123→  c2.fillStyle = "#ffffff";
+   124→  c2.fillRect(0, 0, canvas.width, canvas.height);
+   125→  await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+   126→  return canvas.toDataURL("image/jpeg", 0.85);
+   127→}
+   128→
+   129→function fmtSize(b: number): string {
+   130→  if (b >= 1048576) return `${toHindiDigits((b / 1048576).toFixed(1).replace(".", "٫"))} م.ب`;
+   131→  return `${toHindiDigits(Math.max(1, Math.round(b / 1024)))} ك.ب`;
+   132→}
+   133→
+   134→function extLabel(name: string): string {
+   135→  const e = name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() ?? "ملف";
+   136→  return e === "JPG" ? "JPG" : e;
+   137→}
+   138→
+   139→/* ─────────── المكوّن ─────────── */
+   140→
+   141→export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
+   142→  const files = useWorkspace((s) => s.files);
+   143→  const results = useWorkspace((s) => s.results);
+   144→  const runState = useWorkspace((s) => s.runState);
+   145→  const runMessage = useWorkspace((s) => s.runMessage);
+   146→  const runProgress = useWorkspace((s) => s.runProgress);
+   147→  const addFiles = useWorkspace((s) => s.addFiles);
+   148→  const removeFile = useWorkspace((s) => s.removeFile);
+   149→  const runOnFiles = useWorkspace((s) => s.runOnFiles);
+   150→  const renameResult = useWorkspace((s) => s.renameResult);
+   151→  const clearResults = useWorkspace((s) => s.clearResults);
+   152→  const downloadAll = useWorkspace((s) => s.downloadAll);
+   153→
+   154→  const [activeId, setActiveId] = useState<string | null>(null);
+   155→  const [selFiles, setSelFiles] = useState<Set<string> | null>(null);
+   156→  const [tool, setTool] = useState<OpId | null>(null);
+   157→  const [params, setParams] = useState<Record<string, string>>({});
+   158→  const [selPages, setSelPages] = useState<number[]>([]);
+   159→  const [thumbs, setThumbs] = useState<Record<string, string[]>>({});
+   160→  const [page, setPage] = useState(1);
+   161→
+   162→  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+   163→  const [dragOver, setDragOver] = useState(false);
+   164→  const inputRef = useRef<HTMLInputElement>(null);
+   165→  const thumbsReq = useRef<Set<string>>(new Set());
+   166→
+   167→  /* الملف النشط: المعيّن بالنقر أو آخر ملف أُضيف — اشتقاق بلا effects */
+   168→  const activeFile = files.find((f) => f.id === activeId) ?? files[files.length - 1] ?? null;
+   169→  const effectiveSel = selFiles ?? (activeFile ? new Set([activeFile.id]) : new Set<string>());
+   170→  const running = runState === "running";
+   171→
+   172→  /* مصغرات صفحات الـ PDF النشط */
+   173→  useEffect(() => {
+   174→    if (!activeFile || activeFile.kind !== "pdf") return;
+   175→    if (thumbs[activeFile.id] || thumbsReq.current.has(activeFile.id)) return;
+   176→    thumbsReq.current.add(activeFile.id);
+   177→    pdfPageThumbs(activeFile.file, 60)
+   178→      .then((arr) => setThumbs((t) => ({ ...t, [activeFile.id]: arr })))
+   179→      .catch(() => thumbsReq.current.delete(activeFile.id));
+   180→  }, [activeFile, thumbs]);
+   181→
+   182→  /* المعاينة الكبيرة للصفحة النشطة — مفتوحة بالمفتاح لتفادي setState المتزامن */
+   183→  const previewKey = activeFile ? `${activeFile.id}:${activeFile.kind === "image" ? "img" : page}` : "";
+   184→  const [previewState, setPreviewState] = useState<{ key: string; url: string } | null>(null);
+   185→  useEffect(() => {
+   186→    if (!activeFile || !previewKey) return;
+   187→    let alive = true;
+   188→    let objUrl: string | null = null;
+   189→    const done = (url: string) => {
+   190→      if (alive) setPreviewState({ key: previewKey, url });
+   191→    };
+   192→    if (activeFile.kind === "image") {
+   193→      Promise.resolve().then(() => {
+   194→        objUrl = URL.createObjectURL(activeFile.file);
+   195→        done(objUrl);
+   196→      });
+   197→    } else {
+   198→      renderPageDataUrl(activeFile.file, page)
+   199→        .then(done)
+   200→        .catch(() => undefined);
+   201→    }
+   202→    return () => {
+   203→      alive = false;
+   204→      if (objUrl) URL.revokeObjectURL(objUrl);
+   205→    };
+   206→  }, [activeFile, page, previewKey]);
+   207→  const preview = previewState && previewState.key === previewKey ? previewState.url : "";
+   208→
+   209→  const pickTool = (id: OpId | "convert") => {
+   210→    if (id === "convert") {
+   211→      onOpenConvert();
+   212→      return;
+   213→    }
+   214→    setTool(id);
+   215→    const def: Record<string, string> = {};
+   216→    for (const f of TOOLS_BY_ID[id].fields) if (f.default !== undefined) def[f.key] = f.default;
+   217→    const pf = TOOLS_BY_ID[id].fields.find((f) => f.pagesPicker);
+   218→    if (pf) def[pf.key] = selPages.join(",");
+   219→    setParams(def);
+   220→  };
+   221→
+   222→  const togglePage = (n: number) => {
+   223→    const next = selPages.includes(n)
+   224→      ? selPages.filter((x) => x !== n)
+   225→      : [...selPages, n].sort((a, b) => a - b);
+   226→    setSelPages(next);
+   227→    if (tool) {
+   228→      const pf = TOOLS_BY_ID[tool].fields.find((f) => f.pagesPicker);
+   229→      if (pf) setParams((p) => ({ ...p, [pf.key]: next.join(",") }));
+   230→    }
+   231→  };
+   232→
+   233→  const toggleSel = (id: string) =>
+   234→    setSelFiles((s) => {
+   235→      const n = new Set(s ?? (activeFile ? [activeFile.id] : []));
+   236→      if (n.has(id)) {
+   237→        if (n.size > 1) n.delete(id);
+   238→      } else {
+   239→        n.add(id);
+   240→      }
+   241→      return n;
+   242→    });
+   243→
+   244→  const expectedName = useMemo(() => {
+   245→    if (!tool || !activeFile) return null;
+   246→    const t = TOOLS_BY_ID[tool];
+   247→    const target = t.accepts.includes(activeFile.kind)
+   248→      ? activeFile
+   249→      : files.find((f) => effectiveSel.has(f.id) && t.accepts.includes(f.kind));
+   250→    return target ? resultName(tool, target.name) : null;
+   251→  }, [tool, activeFile, files, effectiveSel]);
+   252→
+   253→  const execute = async () => {
+   254→    if (!tool || running) return;
+   255→    const t = TOOLS_BY_ID[tool];
+   256→    const chosen = files.filter((f) => effectiveSel.has(f.id) && t.accepts.includes(f.kind));
+   257→    if (chosen.length === 0) {
+   258→      toast.error(t.accepts.includes("image") ? "حدد صورًا من قائمة الملفات أولًا" : "حدد ملف PDF من قائمة الملفات أولًا");
+   259→      return;
+   260→    }
+   261→    await runOnFiles(tool, params, chosen.map((f) => f.id));
+   262→    const st = useWorkspace.getState();
+   263→    if (st.runState === "error") toast.error(st.runMessage);
+   264→  };
+   265→
+   266→  const download = (r: ResultFile) => {
+   267→    const embedded = downloadBlob(r.blob, r.name);
+   268→    if (embedded) {
+   269→      toast("بدأ التنزيل", {
+   270→        description: "إن لم يظهر الملف فافتح النتيجة في تبويب مستقل",
+   271→        action: { label: "فتح في تبويب", onClick: () => openBlobInNewTab(r.blob) },
+   272→        duration: 10_000,
+   273→      });
+   274→    } else {
+   275→      toast.success("بدأ التنزيل");
+   276→    }
+   277→  };
+   278→
+   279→  const commitRename = () => {
+   280→    if (!renaming) return;
+   281→    const name = renaming.value.trim();
+   282→    if (name) renameResult(renaming.id, name);
+   283→    setRenaming(null);
+   284→  };
+   285→
+   286→  return (
+   287→    <div
+   288→      className="mx-auto max-w-7xl px-4 py-5"
+   289→      onDragOver={(e) => {
+   290→        e.preventDefault();
+   291→        setDragOver(true);
+   292→      }}
+   293→      onDragLeave={() => setDragOver(false)}
+   294→      onDrop={(e) => {
+   295→        e.preventDefault();
+   296→        setDragOver(false);
+   297→        const fs = Array.from(e.dataTransfer.files);
+   298→        if (fs.length) addFiles(fs);
+   299→      }}
+   300→    >
+   301→      <input
+   302→        ref={inputRef}
+   303→        type="file"
+   304→        multiple
+   305→        accept=".pdf,image/*"
+   306→        className="hidden"
+   307→        onChange={(e) => {
+   308→          const fs = Array.from(e.target.files ?? []);
+   309→          if (fs.length) addFiles(fs);
+   310→          e.target.value = "";
+   311→        }}
+   312→      />
+   313→
+   314→      {files.length === 0 ? (
+   315→        /* ─── لا ملفات: منطقة إفلات واحدة ─── */
+   316→        <div
+   317→          className={cn(
+   318→            "mt-8 rounded-3xl border-2 border-dashed bg-white/70 py-20 text-center transition",
+   319→            dragOver ? "border-primary bg-primary/5" : "border-primary/30"
+   320→          )}
+   321→          onClick={() => inputRef.current?.click()}
+   322→          role="button"
+   323→          tabIndex={0}
+   324→          onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
+   325→        >
+   326→          <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/25">
+   327→            <Plus className="size-7" aria-hidden />
+   328→          </div>
+   329→          <h2 className="mt-4 text-xl font-extrabold">اسحب ملفاتك هنا</h2>
+   330→          <p className="mt-1 text-sm text-muted-foreground">PDF أو صور</p>
+   331→          <Button
+   332→            className="mt-5 px-8 font-extrabold"
+   333→            onClick={(e) => {
+   334→              e.stopPropagation();
+   335→              inputRef.current?.click();
+   336→            }}
+   337→          >
+   338→            اختيار ملفات
+   339→          </Button>
+   340→        </div>
+   341→      ) : (
+   342→        <>
+   343→          {/* ─── شريط الأدوات ─── */}
+   344→          <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
+   345→            {TOOLBAR.map(({ id, label }) => (
+   346→              <button
+   347→                key={id}
+   348→                onClick={() => pickTool(id)}
+   349→                className={cn(
+   350→                  "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
+   351→                  tool === id
+   352→                    ? "bg-primary/10 text-primary outline outline-1 outline-primary/30"
+   353→                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
+   354→                )}
+   355→              >
+   356→                {TOOL_ICONS[id]}
+   357→                {label}
+   358→              </button>
+   359→            ))}
+   360→          </div>
+   361→
+   362→          {/* ─── الجسم: ملفات + صفحات + معاينة ─── */}
+   363→          <div className="mt-4 grid gap-4 lg:grid-cols-[200px_130px_1fr]">
+   364→            <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-3">
+   365→              <p className="px-1 text-[11px] font-bold text-muted-foreground">الملفات</p>
+   366→              <div className="flex max-h-[460px] flex-col gap-2 overflow-y-auto">
+   367→                {files.map((f) => (
+   368→                  <div
+   369→                    key={f.id}
+   370→                    onClick={() => {
+   371→                      setActiveId(f.id);
+   372→                      setPage(1);
+   373→                      setSelPages([]);
+   374→                    }}
+   375→                    className={cn(
+   376→                      "relative flex cursor-pointer items-center gap-2 rounded-xl border p-2",
+   377→                      f.id === activeId
+   378→                        ? "border-primary bg-primary/5"
+   379→                        : effectiveSel.has(f.id)
+   380→                          ? "border-primary/50"
+   381→                          : "border-border"
+   382→                    )}
+   383→                  >
+   384→                    <button
+   385→                      onClick={(e) => {
+   386→                        e.stopPropagation();
+   387→                        toggleSel(f.id);
+   388→                      }}
+   389→                      aria-label="تحديد الملف"
+   390→                      className={cn(
+   391→                        "absolute -left-1.5 -top-1.5 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
+   392→                        effectiveSel.has(f.id)
+   393→                          ? "border-primary bg-primary text-white"
+   394→                          : "border-border bg-white text-transparent"
+   395→                      )}
+   396→                    >
+   397→                      ✓
+   398→                    </button>
+   399→                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-red-50 text-[9px] font-extrabold text-red-600">
+   400→                      {f.kind === "image" ? "IMG" : "PDF"}
+   401→                    </span>
+   402→                    <span className="min-w-0">
+   403→                      <span className="block max-w-[108px] truncate text-xs font-bold">{f.name}</span>
+   404→                      <span className="block text-[10px] text-muted-foreground">
+   405→                        {f.pages ? `${toHindiDigits(f.pages)} صفحات · ` : ""}
+   406→                        {fmtSize(f.size)}
+   407→                      </span>
+   408→                    </span>
+   409→                    <button
+   410→                      onClick={(e) => {
+   411→                        e.stopPropagation();
+   412→                        removeFile(f.id);
+   413→                      }}
+   414→                      aria-label="إزالة الملف"
+   415→                      className="mr-auto text-muted-foreground/40 hover:text-red-500"
+   416→                    >
+   417→                      <X className="size-3.5" aria-hidden />
+   418→                    </button>
+   419→                  </div>
+   420→                ))}
+   421→                <button
+   422→                  onClick={() => inputRef.current?.click()}
+   423→                  className="rounded-xl border border-dashed border-border py-2.5 text-xs font-bold text-muted-foreground hover:border-primary/40 hover:text-primary"
+   424→                >
+   425→                  + إضافة ملف
+   426→                </button>
+   427→              </div>
+   428→            </div>
+   429→
+   430→            <div className="hidden max-h-[560px] flex-col gap-2 overflow-y-auto rounded-2xl border border-border bg-white p-3 lg:flex">
+   431→              <p className="px-1 text-[11px] font-bold text-muted-foreground">الصفحات</p>
+   432→              {activeFile?.kind === "pdf" &&
+   433→                (thumbs[activeFile.id] ?? []).map((src, i) => (
+   434→                  <div
+   435→                    key={i}
+   436→                    onClick={() => setPage(i + 1)}
+   437→                    className={cn(
+   438→                      "relative shrink-0 cursor-pointer rounded-lg border bg-white p-1.5",
+   439→                      page === i + 1 ? "border-primary ring-2 ring-primary/15" : "border-border"
+   440→                    )}
+   441→                  >
+   442→                    <img src={src} alt={`صفحة ${toHindiDigits(i + 1)}`} className="w-full rounded" />
+   443→                    <button
+   444→                      onClick={(e) => {
+   445→                        e.stopPropagation();
+   446→                        togglePage(i + 1);
+   447→                      }}
+   448→                      aria-label="تحديد الصفحة"
+   449→                      className={cn(
+   450→                        "absolute -left-1.5 -top-1.5 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
+   451→                        selPages.includes(i + 1)
+   452→                          ? "border-primary bg-primary text-white"
+   453→                          : "border-border bg-white text-muted-foreground"
+   454→                      )}
+   455→                    >
+   456→                      {selPages.includes(i + 1) ? "✓" : toHindiDigits(i + 1)}
+   457→                    </button>
+   458→                  </div>
+   459→                ))}
+   460→              {activeFile?.kind === "pdf" && !thumbs[activeFile.id] && (
+   461→                <p className="py-4 text-center text-[11px] text-muted-foreground">جارٍ التحضير…</p>
+   462→              )}
+   463→              {activeFile?.kind === "image" && activeFile.thumb && (
+   464→                <img src={activeFile.thumb} alt="" className="rounded-lg border border-border" />
+   465→              )}
+   466→            </div>
+   467→
+   468→            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-border bg-slate-50 p-4">
+   469→              {preview ? (
+   470→                <img
+   471→                  src={preview}
+   472→                  alt="معاينة الملف"
+   473→                  className="max-h-[560px] max-w-full rounded-md bg-white shadow-xl shadow-black/10"
+   474→                />
+   475→              ) : (
+   476→                <div className="size-64 max-w-full animate-pulse rounded-md bg-white shadow-lg" />
+   477→              )}
+   478→              {activeFile?.kind === "pdf" && (activeFile.pages ?? 0) > 1 && (
+   479→                <div className="mt-4 flex items-center gap-3">
+   480→                  <button
+   481→                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+   482→                    aria-label="الصفحة السابقة"
+   483→                    className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
+   484→                  >
+   485→                    ›
+   486→                  </button>
+   487→                  <span className="text-sm font-extrabold text-muted-foreground">
+   488→                    {toHindiDigits(page)} / {toHindiDigits(activeFile.pages ?? 1)}
+   489→                  </span>
+   490→                  <button
+   491→                    onClick={() => setPage((p) => Math.min(activeFile.pages ?? 1, p + 1))}
+   492→                    aria-label="الصفحة التالية"
+   493→                    className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
+   494→                  >
+   495→                    ‹
+   496→                  </button>
+   497→                </div>
+   498→              )}
+   499→            </div>
+   500→          </div>
+   501→
+   502→          {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة ─── */}
+   503→          <div className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm">
+   504→            {tool === "remove_watermark" && (
+   505→              <span className="w-full text-[10px] text-muted-foreground">
+   506→                هذه الأداة تعالج الملف على الخادم ويُحذف فور انتهاء التنفيذ — والعلامات المرسومة داخل صور قد لا تُحذف
+   507→              </span>
+   508→            )}
+   509→            {tool ? (
+   510→              TOOLS_BY_ID[tool].fields.map((f) => (
+   511→                <span key={f.key} className="flex items-center gap-1.5">
+   512→                  <span className="text-[11px] font-bold text-muted-foreground">{f.label}</span>
+   513→                  {f.type === "select" ? (
+   514→                    <select
+   515→                      value={params[f.key] ?? f.default ?? ""}
+   516→                      onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+   517→                      className="rounded-lg border border-border bg-white px-2 py-1.5 text-xs font-bold"
+   518→                    >
+   519→                      {f.options?.map((o) => (
+   520→                        <option key={o.value} value={o.value}>
+   521→                          {o.label}
+   522→                        </option>
+   523→                      ))}
+   524→                    </select>
+   525→                  ) : (
+   526→                    <input
+   527→                      value={params[f.key] ?? ""}
+   528→                      onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+   529→                      placeholder={f.placeholder}
+   530→                      className="w-44 rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold placeholder:font-normal placeholder:text-muted-foreground/60"
+   531→                    />
+   532→                  )}
+   533→                </span>
+   534→              ))
+   535→            ) : (
+   536→              <span className="px-1 text-xs font-bold text-muted-foreground">اختر أداة من الشريط</span>
+   537→            )}
+   538→            <span className="flex-1" />
+   539→            {expectedName && (
+   540→              <span className="text-[11px] text-muted-foreground">
+   541→                تُحفظ باسم <b className="text-xs text-foreground">{expectedName}</b>
+   542→              </span>
+   543→            )}
+   544→            <Button size="sm" disabled={!tool || running} onClick={execute} className="px-6 font-extrabold">
+   545→              {running ? "جارٍ التنفيذ…" : "نفّذ"}
+   546→            </Button>
+   547→          </div>
+   548→          {running && (
+   549→            <div className="mt-2">
+   550→              <div className="h-1.5 overflow-hidden rounded-full bg-border">
+   551→                <div
+   552→                  className="h-full rounded-full bg-primary transition-all"
+   553→                  style={{ width: `${Math.round(runProgress * 100)}%` }}
+   554→                />
+   555→              </div>
+   556→              <p className="mt-1 text-[11px] font-bold text-muted-foreground">{runMessage}</p>
+   557→            </div>
+   558→          )}
+   559→        </>
+   560→      )}
+   561→
+   562→      {/* ─── النتائج ─── */}
+   563→      {results.length > 0 && (
+   564→        <div className="mt-5 rounded-2xl border-2 border-emerald-200 bg-white p-4 shadow-lg shadow-emerald-900/5">
+   565→          <div className="flex flex-wrap items-center gap-2">
+   566→            <span className="grid size-7 place-items-center rounded-lg bg-emerald-500 font-extrabold text-white">
+   567→              ✓
+   568→            </span>
+   569→            <h3 className="font-extrabold text-emerald-600">
+   570→              جاهز — {toHindiDigits(results.length)} {results.length === 1 ? "ملف" : "ملفات"}
+   571→            </h3>
+   572→            <span className="flex-1" />
+   573→            {results.length > 1 && (
+   574→              <Button variant="outline" size="sm" onClick={downloadAll} className="font-bold">
+   575→                تحميل الكل (ZIP)
+   576→              </Button>
+   577→            )}
+   578→            <Button
+   579→              variant="ghost"
+   580→              size="sm"
+   581→              onClick={clearResults}
+   582→              className="text-muted-foreground"
+   583→            >
+   584→              رجوع للشغل
+   585→            </Button>
+   586→          </div>
+   587→          <div className="mt-3 flex flex-col gap-2">
+   588→            {results.map((r) => (
+   589→              <div key={r.id} className="flex items-center gap-3 rounded-xl border border-border p-2.5">
+   590→                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-red-50 text-[9px] font-extrabold text-red-600">
+   591→                  {extLabel(r.name)}
+   592→                </span>
+   593→                {renaming?.id === r.id ? (
+   594→                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+   595→                    <input
+   596→                      autoFocus
+   597→                      value={renaming.value}
+   598→                      onChange={(e) => setRenaming({ id: r.id, value: e.target.value })}
+   599→                      onKeyDown={(e) => e.key === "Enter" && commitRename()}
+   600→                      className="w-full rounded-lg border border-primary/40 px-2 py-1 text-xs font-bold"
+   601→                    />
+   602→                    <button
+   603→                      onClick={commitRename}
+   604→                      aria-label="حفظ الاسم"
+   605→                      className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-500 text-white"
+   606→                    >
+   607→                      <Check className="size-3.5" aria-hidden />
+   608→                    </button>
+   609→                    <button
+   610→                      onClick={() => setRenaming(null)}
+   611→                      aria-label="إلغاء"
+   612→                      className="shrink-0 text-muted-foreground"
+   613→                    >
+   614→                      <X className="size-3.5" aria-hidden />
+   615→                    </button>
+   616→                  </span>
+   617→                ) : (
+   618→                  <span className="min-w-0 flex-1">
+   619→                    <span className="block truncate text-xs font-extrabold">{r.name}</span>
+   620→                    <span className="block text-[10px] text-muted-foreground">{fmtSize(r.size)}</span>
+   621→                  </span>
+   622→                )}
+   623→                {renaming?.id !== r.id && (
+   624→                  <>
+   625→                    <button
+   626→                      onClick={() => setRenaming({ id: r.id, value: r.name })}
+   627→                      aria-label="إعادة تسمية"
+   628→                      className="grid size-8 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground hover:text-primary"
+   629→                    >
+   630→                      <Pencil className="size-3.5" aria-hidden />
+   631→                    </button>
+   632→                    <Button
+   633→                      size="sm"
+   634→                      onClick={() => download(r)}
+   635→                      className="shrink-0 bg-emerald-600 font-extrabold text-white hover:bg-emerald-700"
+   636→                    >
+   637→                      تحميل
+   638→                    </Button>
+   639→                  </>
+   640→                )}
+   641→              </div>
+   642→            ))}
+   643→          </div>
+   644→        </div>
+   645→      )}
+   646→    </div>
+   647→  );
+   648→}
+   649→

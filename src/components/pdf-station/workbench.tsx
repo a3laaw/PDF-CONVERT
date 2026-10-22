@@ -10,7 +10,7 @@ import { resultName } from "@/lib/naming";
 import { downloadBlob, openBlobInNewTab, pdfPageThumbs } from "@/lib/pdf-engine";
 import { toHindiDigits } from "@/lib/arabic";
 import { toast } from "sonner";
-import type { OpId, ResultFile } from "@/lib/types";
+import type { FileKind, OpId, ResultFile } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -250,6 +250,32 @@ export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
     return target ? resultName(tool, target.name) : null;
   }, [tool, activeFile, files, effectiveSel]);
 
+  /* ذكاء الأدوات: كل أداة تعمل فقط لو المحدد فيهم نوع تقبله */
+  const selKinds = useMemo(() => {
+    const ks = new Set<FileKind>();
+    for (const f of files) if (effectiveSel.has(f.id)) ks.add(f.kind);
+    return ks;
+  }, [files, effectiveSel]);
+
+  const toolEnabled = (id: OpId): boolean => {
+    const t = TOOLS_BY_ID[id];
+    if (!t) return false;
+    for (const k of selKinds) if (t.accepts.includes(k)) return true;
+    return false;
+  };
+
+  const hintDisabled = (id: OpId) => {
+    const t = TOOLS_BY_ID[id];
+    if (!t) return;
+    if (t.accepts.includes("image") && !t.accepts.includes("pdf"))
+      toast.info("الأداة دي للصور — حدّد صورة من قائمة الملفات");
+    else if (activeFile?.kind === "image")
+      toast.info("الأداة دي لملفات PDF — للصور استخدم «من صور»");
+    else if (activeFile && activeFile.kind !== "pdf")
+      toast.info("النوع ده يتحول أولًا من تبويب «تحويل»");
+    else toast.info("حدّد ملف PDF من قائمة الملفات أولًا");
+  };
+
   const execute = async () => {
     if (!tool || running) return;
     const t = TOOLS_BY_ID[tool];
@@ -342,21 +368,26 @@ export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
         <>
           {/* ─── شريط الأدوات ─── */}
           <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
-            {TOOLBAR.map(({ id, label }) => (
-              <button
-                key={id}
-                onClick={() => pickTool(id)}
-                className={cn(
-                  "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
-                  tool === id
-                    ? "bg-primary/10 text-primary outline outline-1 outline-primary/30"
-                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
-                )}
-              >
-                {TOOL_ICONS[id]}
-                {label}
-              </button>
-            ))}
+            {TOOLBAR.map(({ id, label }) => {
+              const ok = id === "convert" || toolEnabled(id as OpId);
+              return (
+                <button
+                  key={id}
+                  onClick={() => (ok ? pickTool(id) : hintDisabled(id as OpId))}
+                  className={cn(
+                    "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
+                    tool === id
+                      ? "bg-primary/10 text-primary outline outline-1 outline-primary/30"
+                      : ok
+                        ? "text-muted-foreground hover:bg-primary/5 hover:text-primary"
+                        : "cursor-not-allowed text-muted-foreground/30"
+                  )}
+                >
+                  {TOOL_ICONS[id]}
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           {/* ─── الجسم: ملفات + صفحات + معاينة ─── */}
@@ -533,7 +564,13 @@ export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
                 </span>
               ))
             ) : (
-              <span className="px-1 text-xs font-bold text-muted-foreground">اختر أداة من الشريط</span>
+              <span className="px-1 text-xs font-bold text-muted-foreground">
+                {activeFile?.kind === "image"
+                  ? "الصور تتحول إلى PDF بأداة «من صور»"
+                  : activeFile && activeFile.kind !== "pdf"
+                    ? "الأنواع الأخرى تتحول من تبويب «تحويل»"
+                    : "اختر أداة من الشريط"}
+              </span>
             )}
             <span className="flex-1" />
             {expectedName && (
