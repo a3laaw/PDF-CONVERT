@@ -4,7 +4,7 @@ import { Archive, Download, FileCheck2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { downloadBlob } from "@/lib/pdf-engine";
+import { downloadBlob, openBlobInNewTab } from "@/lib/pdf-engine";
 import { formatBytes } from "@/lib/arabic";
 import { toHindiDigits } from "@/lib/arabic";
 import { useWorkspace } from "@/store/workspace";
@@ -67,8 +67,17 @@ export function ResultsStrip() {
               <Button
                 size="sm"
                 onClick={() => {
-                  downloadBlob(r.blob, r.name);
-                  toast.success("بدأ التنزيل");
+                  const embedded = downloadBlob(r.blob, r.name);
+                  if (embedded) {
+                    // داخل معاينة مضمّنة: التنزيل قد يُمنع — نوفر بديلًا فوريًا
+                    toast("بدأ التنزيل", {
+                      description: "إن لم يظهر الملف فالمعاينة تمنع التنزيل المباشر — افتح النتيجة في تبويب مستقل",
+                      action: { label: "فتح في تبويب", onClick: () => openBlobInNewTab(r.blob) },
+                      duration: 10_000,
+                    });
+                  } else {
+                    toast.success("بدأ التنزيل");
+                  }
                 }}
                 className="gap-1.5 font-bold shrink-0"
               >

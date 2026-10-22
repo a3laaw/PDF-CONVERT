@@ -276,8 +276,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const { results } = get();
     if (results.length === 0) return;
     const blob = await zipResults(results);
-    const { downloadBlob } = await import("@/lib/pdf-engine");
-    downloadBlob(blob, "نتائج-محطة-PDF.zip");
+    const { downloadBlob, openBlobInNewTab } = await import("@/lib/pdf-engine");
+    const embedded = downloadBlob(blob, "نتائج-محطة-PDF.zip");
+    const { toast } = await import("sonner");
+    if (embedded) {
+      toast("بدأ تنزيل الأرشيف", {
+        description: "إن لم يظهر الملف فالمعاينة تمنع التنزيل المباشر — افتح الأرشيف في تبويب مستقل",
+        action: { label: "فتح في تبويب", onClick: () => openBlobInNewTab(blob) },
+        duration: 10_000,
+      });
+    }
   },
 
   toggleFavorite: (op) => {

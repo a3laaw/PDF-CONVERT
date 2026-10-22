@@ -317,16 +317,19 @@ async function opReorder(
 /* فصل كل صفحة */
 async function opSplit(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {
   const results: ResultFile[] = [];
+  const prefix = inputs.length > 1; // عدة ملفات معًا → نسبق الأسماء ب اسم الملف لتفادي التكرار
   for (const input of inputs) {
     ctx.onProgress?.(`جارٍ فصل صفحات «${input.name}»…`);
     const src = await loadPdfLib(await bytesOf(input));
     const total = src.getPageCount();
+    const base = prefix ? input.name.replace(/\.pdf$/i, "") + "-" : "";
     for (let i = 0; i < total; i++) {
+      ctx.onProgress?.(`فصل «${input.name}»: الصفحة ${toHindiDigits(i + 1)} من ${toHindiDigits(total)}`);
       const out = await PDFDocument.create();
       const [page] = await out.copyPages(src, [i]);
       out.addPage(page);
       const saved = await out.save({ useObjectStreams: true });
-      results.push(resultFile(`صفحة-${toHindiDigits(i + 1)}.pdf`, saved, label, "pdf"));
+      results.push(resultFile(`${base}صفحة-${toHindiDigits(i + 1)}.pdf`, saved, label, "pdf"));
     }
   }
   return results;
@@ -662,13 +665,42 @@ export async function zipResults(files: ResultFile[]): Promise<Blob> {
 }
 
 /** تنزيل ملف */
-export function downloadBlob(blob: Blob, name: string) {
+export function downloadBlob(blob: Blob, name: string): boolean {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
+  a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  // مهلة أطول حتى يبقى الرابط صالحًا إن احتاج المستخدم فتحه من تبويب مستقل
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return isEmbedded();
+}
+
+/** هل نعمل داخل إطار مضمّن (معاينة داخل تطبيق آخر)؟ — التنزيل قد يكون محجوبًا هناك */
+export function isEmbedded(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true; // منع الوصول عبر الحدود = إطار مضمّن من أصل مختلف
+  }
+}
+
+/** فتح مخرج في تبويب مستقل — بديل موثوق حين تمنع المعاينة التنزيل المباشر */
+export function openBlobInNewTab(blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank");
+  if (!w) {
+    // حاجب النوافذ منع الفتح — نترك الرابط حيًا مدة أطول ونجرب عبر رابط مخفي
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 120_000);
 }
