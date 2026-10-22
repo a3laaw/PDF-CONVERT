@@ -9,6 +9,28 @@ export const INPUTS_DIR = path.join(DATA_DIR, "inputs");
 export const OUTPUTS_DIR = path.join(DATA_DIR, "outputs");
 const SCRIPT = path.join(process.cwd(), "scripts", "convert_to_pdf.py");
 
+/** اختيار مفسّر بايثون موثوق: بيئة المشروع الافتراضية أولًا ثم python3 من PATH */
+async function resolvePython(): Promise<string> {
+  const candidates = [
+    process.env.PDF_ENGINE_PYTHON,
+    "/home/z/.venv/bin/python3",
+    "/usr/local/bin/python3",
+    "/usr/bin/python3",
+    "python3",
+  ].filter(Boolean) as string[];
+  for (const c of candidates) {
+    try {
+      await fs.access(c.startsWith("/") ? c : c);
+      // python3 من PATH لا نتحقق منه بـ fs.access لأنه يعتمد على PATH نفسه
+      if (c !== "python3") return c;
+      if (candidates.indexOf(c) === candidates.length - 1) return c;
+    } catch {
+      /* التالي */
+    }
+  }
+  return "python3";
+}
+
 export const ALLOWED_EXTS = new Set([
   "dxf", "dwg", "rvt", "psd", "ai", "eps", "ps", "indd", "pdf",
   "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif",
@@ -58,8 +80,9 @@ interface EngineProc {
 }
 
 function runEngine(args: string[], timeoutMs = 240_000): Promise<EngineProc> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("python3", [SCRIPT, ...args], { cwd: process.cwd() });
+  return new Promise(async (resolve, reject) => {
+    const pythonBin = await resolvePython();
+    const proc = spawn(pythonBin, [SCRIPT, ...args], { cwd: process.cwd() });
     let stdout = "";
     let stderr = "";
     let done = false;

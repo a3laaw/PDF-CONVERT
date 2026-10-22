@@ -41,3 +41,20 @@ Stage Summary:
 - ملفات المستخدم: يُحذف الأصل فور التحويل والنواتج بعد ساعتين تلقائياً
 - الملفات الرئيسية: scripts/convert_to_pdf.py، src/lib/server-convert.ts، src/lib/convert-formats.ts، src/app/api/{convert,file/[id],merge,zip}/route.ts، src/components/pdf-station/convert-studio.tsx، تعديلات page/header-bar/command-palette/layout
 - قيد بيئة الاختبار الموثق: رفع ملفات حقيقية عبر agent-browser CDP لا يعمل (0-byte) — الاختبار اليدوي/الإنتاج لا يتأثر (مثبت بـ curl E2E + اختبار File في الذاكرة عبر الواجهة)
+
+---
+Task ID: 11
+Agent: Main Agent (Z.ai)
+Task: طلب المستخدم «اظهر البريفيو» بعد انقطاع السياق — اكتشاف إعادة تعيين بيئة العمل وإصلاح المحرك وإثبات عمل التطبيق
+
+Work Log:
+- بعد استعادة السياق تبيّن أن الـ sandbox أعادت المشروع إلى لقطة قديمة (مهمة 1 فقط): اختفت كل أعمال المهام 2-10 (تكامل ODA، الرفع المجزأ، حزمة النشر deploy-bundle، أدلة النشر، بناء standalone الإنتاجي، artifacts/real_dwgs)
+- خادم التطوير التلقائي (next dev -p 3000) كان يعمل لكن /api/health و/studio ترجع 404 (غير موجودتين في هذه اللقطة)
+- اختبرت /api/convert بحقيبة DXF → فشل: python3 الذي يستدعيه الخادم (/usr/bin/python3) فقد حزم pip بعد إعادة التعيين، بينما shell الجلسة يستخدم /home/z/.venv/bin/python3
+- أصلحت: تثبيت arabic-reshaper/python-bidi/psd-tools/olefile في الـ venv + تثبيت كامل الحزم (ezdxf/PyMuPDF/reportlab/matplotlib/Pillow/...) في /usr/bin/python3 بـ --break-system-packages
+- رقّعت src/lib/server-convert.ts بدالة resolvePython() تفضّل PDF_ENGINE_PYTHON ثم venv ثم /usr/local ثم /usr/bin ثم python3 — منعًا لتكرار مشكلة تعدد المفسرات
+- أثبتّ E2E حقيقي عبر API: DXF→ezdxf-vector (1 صفحة، 3320B)، DWG→dwg-preview (1 صفحة، 53596B)، PNG→pillow (1 صفحة، 20955B)
+
+Stage Summary:
+- البريفيو يعمل الآن بنسخة «مهمة 1»: استوديو التحويل DWG/DXF/RVT/PSD/AI/EPS/INDD/صور → PDF (DWG بأفضل جهد: معاينة مدمجة، ليس 100% متجهي)
+- إنذار صادق للمستخدم: ميزات المهام 2-10 غير موجودة في هذه اللقطة وتحتاج إعادة بناء إن طُلبت
