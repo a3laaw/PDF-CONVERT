@@ -396,3 +396,21 @@ Work Log:
 
 Stage Summary:
 - Task 27 مكتمل ومتحقق منه؛ لا عمل متبقٍ على هذا الطلب. بانتظار قرار المستخدم على ترتيب مراحل المقترح (المرحلة 1+2 جاهزتان للبدء فور «ابدأ»).
+
+---
+Task ID: 25
+Agent: main (Z)
+Task: رفع المشروع إلى GitHub باسم PDF-CONVERT بناءً على طلب المستخدم («ارفعه علي جيت هاب باسم PDF CONVERT»)
+
+Work Log:
+- فحص البيئة: git مهيأ على main بلا remote، لا GitHub CLI ولا توكنات مخزنة؛ `.env` كان متتبعًا (مجرد `DATABASE_URL=file:` محلي — بلا أسرار).
+- تحديث .gitignore واستبعاد من التتبع (مع بقائها على القرص): scripts/build/ (434MB ملفات LibreDWG المترجمة)، scripts/t_out/ (لقطات E2E)، tool-results، download، upload، test-assets، .zscripts، mini-services، db/، *.db، .env.
+- كتابة README.md عربي كامل: المزايا، التقنيات، التشغيل المحلي، ملاحظة scripts/build، الرخص (pdf-lib/pdfjs/sharp + LibreDWG GPLv3)، البنية.
+- إعادة تسمية package.json إلى `pdf-convert`؛ تنظيف تاريخ الجيت من ملفات مخرجات converter-data/outputs وملفات مساعد المصادقة المؤقتة (scripts/.gh_device.json وgh_poll_token.py) بعد أن التقطها أوتو-كوميت البيئة؛ force-push لتاريخ نظيف.
+- مصادقة: توكن PAT من المستخدم (صلاحية repo) — استُخدم عبر credential helper مؤقت في الذاكرة فقط، بلا تخزين في أي ملف أو remote URL؛ أوقفت poller مسار Device-flow وأزلت ملفاته.
+- إنشاء الريبو عبر API ثم الدفع والتحقق: `git ls-remote` يطابق HEAD المحلي؛ فحص API للمحتوى البعيد: لا `.env`، لا `scripts/.gh_*`، لا outputs؛ 165 ملفًا / ~7MB.
+
+Stage Summary:
+- الريبو العام جاهز: https://github.com/a3laaw/PDF-CONVERT (فرع main، حساب a3laaw).
+- نصيحة أمان أُبلغت للمستخدم: حذف/سحب التوكن بعد انتهاء المهمة من github.com/settings/tokens.
+- المهام المعلّقة سابقة (اعتماد مقترح المراحل 1+2، إلخ) لم تتغير.
