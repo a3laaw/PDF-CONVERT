@@ -3,11 +3,11 @@
 /* شاشة العمل الجديدة — عرض الملف + شريط أدوات واحد، بدون أوامر نصية ولا شرح */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Pencil, Plus, X } from "lucide-react";
+import { Check, Copy, FileOutput, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { useWorkspace } from "@/store/workspace";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
-import { downloadBlob, openBlobInNewTab, pdfPageThumbs } from "@/lib/pdf-engine";
+import { downloadBlob, openBlobInNewTab, pageQuickAction, pdfPageThumbs } from "@/lib/pdf-engine";
 import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
 import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { toHindiDigits } from "@/lib/arabic";
@@ -158,6 +158,36 @@ function fmtSize(b: number): string {
   return `${toHindiDigits(Math.max(1, Math.round(b / 1024)))} ك.ب`;
 }
 
+/* زرّ إجراء سريع على صفحة (شريط الصفحات الذكي — المرحلة 1) */
+function QuickPageBtn({
+  label,
+  danger,
+  onClick,
+  children,
+}: {
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "grid size-6 place-items-center rounded-md bg-white text-muted-foreground shadow-sm ring-1 ring-border transition",
+        danger ? "hover:bg-red-50 hover:text-red-600" : "hover:bg-primary/10 hover:text-primary"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function extLabel(name: string): string {
   const e = name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() ?? "ملف";
   return e === "JPG" ? "JPG" : e;
@@ -178,6 +208,8 @@ export function Workbench() {
   const clearResults = useWorkspace((s) => s.clearResults);
   const downloadAll = useWorkspace((s) => s.downloadAll);
   const addEditorResult = useWorkspace((s) => s.addEditorResult);
+  const appendResult = useWorkspace((s) => s.appendResult);
+  const addResultAsFile = useWorkspace((s) => s.addResultAsFile);
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [selFiles, setSelFiles] = useState<Set<string> | null>(null);
@@ -327,6 +359,41 @@ export function Workbench() {
     if (PAGES_TOOLS.includes(id) && selPages.length > 0)
       return `${verb} (${pagesLabel(selPages.length)})`;
     return verb;
+  };
+
+  /* المرحلة 1 — أفعال شريط الصفحات السريعة: صفحة واحدة في نقرة
+     حذف/تدوير/تكرار → الناتج يصير ملف العمل النشط فورًا (الأصل يبقى محفوظًا)
+     استخراج → ملف مستقل يبقى في القائمة دون تحويل التركيز */
+  const [quickBusy, setQuickBusy] = useState(false);
+  const quickAction = async (
+    action: "delete" | "rotate" | "extract" | "duplicate",
+    pageNo: number
+  ) => {
+    if (!activeFile || activeFile.kind !== "pdf" || running || quickBusy) return;
+    setQuickBusy(true);
+    try {
+      const { name, blob } = await pageQuickAction(activeFile.file, action, pageNo);
+      appendResult(name, blob, "page-quick");
+      if (action === "extract") {
+        toast.success(`اتسحبت الصفحة ${toHindiDigits(pageNo)} في ملف مستقل`);
+      } else {
+        const newId = await addResultAsFile(name, blob);
+        setActiveId(newId);
+        setPage(1);
+        setSelPages([]);
+        toast.success(
+          action === "delete"
+            ? `حُذفت الصفحة ${toHindiDigits(pageNo)} — أكمل على النسخة الجديدة`
+            : action === "rotate"
+              ? `اتدوّرت الصفحة ${toHindiDigits(pageNo)} 90° — أكمل على النسخة الجديدة`
+              : `اتكررت الصفحة ${toHindiDigits(pageNo)} — أكمل على النسخة الجديدة`
+        );
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "تعذّر تنفيذ الإجراء");
+    } finally {
+      setQuickBusy(false);
+    }
   };
 
   const execute = async () => {
@@ -555,7 +622,7 @@ export function Workbench() {
                     key={i}
                     onClick={() => setPage(i + 1)}
                     className={cn(
-                      "relative shrink-0 cursor-pointer rounded-lg border bg-white p-1.5",
+                      "group relative shrink-0 cursor-pointer rounded-lg border bg-white p-1.5",
                       page === i + 1 ? "border-primary ring-2 ring-primary/15" : "border-border"
                     )}
                   >
@@ -567,7 +634,7 @@ export function Workbench() {
                       }}
                       aria-label="تحديد الصفحة"
                       className={cn(
-                        "absolute -left-1.5 -top-1.5 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
+                        "absolute -left-1.5 -top-1.5 z-10 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
                         selPages.includes(i + 1)
                           ? "border-primary bg-primary text-white"
                           : "border-border bg-white text-muted-foreground"
@@ -575,6 +642,39 @@ export function Workbench() {
                     >
                       {selPages.includes(i + 1) ? "✓" : toHindiDigits(i + 1)}
                     </button>
+                    {/* أفعال سريعة على الصفحة — دايمة على الصفحة النشطة، وبالمرور/التركيز للباقي */}
+                    <div
+                      className={cn(
+                        "absolute inset-x-1 bottom-1 z-10 justify-center gap-1 rounded-lg bg-white/95 p-1 shadow-md ring-1 ring-border",
+                        page === i + 1 ? "flex" : "hidden group-hover:flex group-focus-within:flex"
+                      )}
+                    >
+                      <QuickPageBtn
+                        label={`حذف الصفحة ${toHindiDigits(i + 1)}`}
+                        danger
+                        onClick={() => quickAction("delete", i + 1)}
+                      >
+                        <Trash2 className="size-3.5" aria-hidden />
+                      </QuickPageBtn>
+                      <QuickPageBtn
+                        label={`تدوير الصفحة ${toHindiDigits(i + 1)} 90°`}
+                        onClick={() => quickAction("rotate", i + 1)}
+                      >
+                        <RotateCw className="size-3.5" aria-hidden />
+                      </QuickPageBtn>
+                      <QuickPageBtn
+                        label={`استخراج الصفحة ${toHindiDigits(i + 1)}`}
+                        onClick={() => quickAction("extract", i + 1)}
+                      >
+                        <FileOutput className="size-3.5" aria-hidden />
+                      </QuickPageBtn>
+                      <QuickPageBtn
+                        label={`تكرار الصفحة ${toHindiDigits(i + 1)}`}
+                        onClick={() => quickAction("duplicate", i + 1)}
+                      >
+                        <Copy className="size-3.5" aria-hidden />
+                      </QuickPageBtn>
+                    </div>
                   </div>
                 ))}
               {activeFile?.kind === "pdf" && !thumbs[activeFile.id] && (
@@ -633,6 +733,74 @@ export function Workbench() {
               )}
             </div>
             </>
+            )}
+
+            {/* الجوال — شريط الصفحات الأفقي بأزرار الأفعال السريعة (الرِيل المخفي تحت 1024px) */}
+            {activeFile?.kind === "pdf" && !editing && !splitMode && (
+              <div className="lg:hidden">
+                <p className="px-1 pb-1.5 text-[11px] font-bold text-muted-foreground">
+                  الصفحات — مرّر أفقيًا واضغط على أي إجراء
+                </p>
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                  {(thumbs[activeFile.id] ?? []).map((src, i) => (
+                    <div
+                      key={i}
+                      onClick={() => setPage(i + 1)}
+                      className={cn(
+                        "relative w-[110px] shrink-0 cursor-pointer rounded-lg border bg-white p-1.5",
+                        page === i + 1 ? "border-primary ring-2 ring-primary/15" : "border-border"
+                      )}
+                    >
+                      <img src={src} alt={`صفحة ${toHindiDigits(i + 1)}`} className="h-28 w-full rounded object-cover object-top" />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          togglePage(i + 1);
+                        }}
+                        aria-label="تحديد الصفحة"
+                        className={cn(
+                          "absolute -left-1.5 -top-1.5 z-10 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
+                          selPages.includes(i + 1)
+                            ? "border-primary bg-primary text-white"
+                            : "border-border bg-white text-muted-foreground"
+                        )}
+                      >
+                        {selPages.includes(i + 1) ? "✓" : toHindiDigits(i + 1)}
+                      </button>
+                      <div className="mt-1 flex items-center justify-center gap-0.5">
+                        <QuickPageBtn
+                          label={`حذف الصفحة ${toHindiDigits(i + 1)}`}
+                          danger
+                          onClick={() => quickAction("delete", i + 1)}
+                        >
+                          <Trash2 className="size-3" aria-hidden />
+                        </QuickPageBtn>
+                        <QuickPageBtn
+                          label={`تدوير الصفحة ${toHindiDigits(i + 1)} 90°`}
+                          onClick={() => quickAction("rotate", i + 1)}
+                        >
+                          <RotateCw className="size-3" aria-hidden />
+                        </QuickPageBtn>
+                        <QuickPageBtn
+                          label={`استخراج الصفحة ${toHindiDigits(i + 1)}`}
+                          onClick={() => quickAction("extract", i + 1)}
+                        >
+                          <FileOutput className="size-3" aria-hidden />
+                        </QuickPageBtn>
+                        <QuickPageBtn
+                          label={`تكرار الصفحة ${toHindiDigits(i + 1)}`}
+                          onClick={() => quickAction("duplicate", i + 1)}
+                        >
+                          <Copy className="size-3" aria-hidden />
+                        </QuickPageBtn>
+                      </div>
+                    </div>
+                  ))}
+                  {!thumbs[activeFile.id] && (
+                    <p className="py-4 text-[11px] text-muted-foreground">جارٍ التحضير…</p>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 

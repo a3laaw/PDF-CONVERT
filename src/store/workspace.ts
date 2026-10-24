@@ -52,7 +52,7 @@ interface WorkspaceState {
   history: HistoryItem[];
   favorites: OpId[];
 
-  addFiles: (list: File[]) => Promise<void>;
+  addFiles: (list: File[]) => Promise<string[]>;
   removeFile: (id: string) => void;
   clearFiles: () => void;
   moveFile: (id: string, dir: -1 | 1) => void;
@@ -70,6 +70,8 @@ interface WorkspaceState {
   runOnFiles: (op: OpId, params: Record<string, string>, fileIds: string[]) => Promise<void>;
   addEditorResult: (name: string, blob: Blob) => void;
   addResults: (items: { name: string; blob: Blob }[]) => void;
+  appendResult: (name: string, blob: Blob, fromStep: string) => void;
+  addResultAsFile: (name: string, blob: Blob) => Promise<string>;
   renameResult: (id: string, name: string) => void;
   clearResults: () => void;
   downloadAll: () => Promise<void>;
@@ -133,6 +135,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   favorites: loadJson<OpId[]>(FAVS_KEY, []),
 
   addFiles: async (list) => {
+    const ids: string[] = [];
     for (const file of list) {
       const kind = await sniffKind(file);
       const wf: WorkspaceFile = {
@@ -143,6 +146,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         size: file.size,
         addedAt: Date.now(),
       };
+      ids.push(wf.id);
       set((s) => ({ files: [...s.files, wf] }));
       // فحص غير معطّل للواجهة
       if (kind === "pdf") {
@@ -165,6 +169,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           .catch(() => undefined);
       }
     }
+    return ids;
   },
 
   removeFile: (id) => {
@@ -383,6 +388,34 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       runMessage: `تم! ${toHindiDigits(results.length)} ${results.length === 1 ? "ملف جاهز" : "ملفات جاهزة"}`,
       runProgress: 1,
     });
+  },
+
+  /* نتيجة تُضاف للنتائج السابقة دون مسحها — أفعال شريط الصفحات السريعة */
+  appendResult: (name, blob, fromStep) => {
+    set((s) => ({
+      results: [
+        ...s.results,
+        {
+          id: nanoid(),
+          name,
+          blob,
+          url: URL.createObjectURL(blob),
+          size: blob.size,
+          fromStep,
+          kind: blob.type.includes("pdf") ? "pdf" : "image",
+        },
+      ],
+      runState: "done",
+      runMessage: "تم! ملف جاهز",
+      runProgress: 1,
+    }));
+  },
+
+  /* تحويل ناتج إلى ملف عمل قابل للأدوات — يرجّع معرّفه (يُستخدم لتفعيله فورًا) */
+  addResultAsFile: async (name, blob) => {
+    const file = new File([blob], name, { type: blob.type || "application/pdf" });
+    const [id] = await get().addFiles([file]);
+    return id;
   },
 
   renameResult: (id, name) =>

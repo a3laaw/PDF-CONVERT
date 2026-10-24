@@ -363,6 +363,60 @@ export async function splitPagesVisual(file: File, pages: number[]): Promise<Spl
   return { separated, remainder };
 }
 
+/* ─── المرحلة 1 — شريط الصفحات الذكي: أفعال سريعة على صفحة واحدة ───
+   حذف/تدوير 90°/استخراج/تكرار — صفحة واحدة في نقرة، والناتج ملف جديد
+   غير مدمَّر (الأصل يبقى كما هو في قائمة الملفات) */
+export type PageQuickAction = "delete" | "rotate" | "extract" | "duplicate";
+
+export async function pageQuickAction(
+  file: File,
+  action: PageQuickAction,
+  page: number
+): Promise<{ name: string; blob: Blob }> {
+  const bytes = await bytesOf({ id: "", name: file.name, kind: "pdf", file });
+  const doc = await loadPdfLib(bytes);
+  const total = doc.getPageCount();
+  if (page < 1 || page > total) {
+    throw new Error(`الصفحة ${toHindiDigits(page)} غير موجودة — الملف فيه ${toHindiDigits(total)} صفحات`);
+  }
+  const toBlob = (saved: Uint8Array) =>
+    new Blob([saved as unknown as BlobPart], { type: "application/pdf" });
+  const base = stripExt(file.name);
+  const n = toHindiDigits(page);
+
+  if (action === "rotate") {
+    const p = doc.getPage(page - 1);
+    p.setRotation(degrees((p.getRotation().angle + 90) % 360));
+    const saved = await doc.save({ useObjectStreams: true });
+    return { name: `${base}-مدوّر-صفحة-${n}.pdf`, blob: toBlob(saved) };
+  }
+
+  if (action === "duplicate") {
+    const [copied] = await doc.copyPages(doc, [page - 1]);
+    doc.insertPage(page, copied);
+    const saved = await doc.save({ useObjectStreams: true });
+    return { name: `${base}-مكرر-صفحة-${n}.pdf`, blob: toBlob(saved) };
+  }
+
+  /* استخراج / حذف */
+  const keep =
+    action === "extract"
+      ? [page - 1]
+      : Array.from({ length: total }, (_, i) => i).filter((i) => i !== page - 1);
+  if (keep.length === 0) throw new Error("لا يمكن حذف الصفحة الوحيدة في الملف");
+  const out = await PDFDocument.create();
+  const copied = await out.copyPages(doc, keep);
+  copied.forEach((p) => out.addPage(p));
+  const saved = await out.save({ useObjectStreams: true });
+  return {
+    name:
+      action === "extract"
+        ? `${base}-صفحة-${n}.pdf`
+        : `${base}-بعد-حذف-صفحة-${n}.pdf`,
+    blob: toBlob(saved),
+  };
+}
+
 /* ختم (علامة مائية) */
 async function opWatermark(
   inputs: EngineInput[],
