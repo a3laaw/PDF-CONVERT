@@ -4,11 +4,12 @@ import { useState } from "react";
 import { Lock } from "lucide-react";
 import { HeaderBar, type AppView } from "@/components/pdf-station/header-bar";
 import { Workbench } from "@/components/pdf-station/workbench";
-import { ConvertStudio } from "@/components/pdf-station/convert-studio";
+import { CadStudio, type CadFamily } from "@/components/pdf-station/cad-studio";
 
-/** «محوّل PDF» — عرض الملف + شريط أدوات، بدون أي خطوات إضافية */
+/** «محوّل PDF» — أربعة استوديوهات بنفس النمط: عرض أولًا ثم الإجراء */
 export default function Home() {
   const [view, setView] = useState<AppView>("home");
+  const isCad = view.startsWith("cad-");
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -16,9 +17,9 @@ export default function Home() {
 
       <main className="flex-1">
         {view === "home" ? (
-          <Workbench onOpenConvert={() => setView("convert")} />
+          <Workbench onOpenStudio={(v) => setView(v)} />
         ) : (
-          <ConvertStudio />
+          <CadStudio key={view} family={view.slice(4) as CadFamily} />
         )}
       </main>
 
@@ -30,8 +31,8 @@ export default function Home() {
           </p>
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Lock className="size-3.5" aria-hidden />
-            {view === "convert"
-              ? "التحويل على الخادم: يُحذف الملف الأصلي فورًا والنواتج بعد ساعتين"
+            {isCad
+              ? "العرض والتحويل على الخادم: يُحذف الملف الأصلي فورًا والنواتج بعد ساعتين"
               : "الشغل يتم داخل متصفحك — ملفاتك لا تُرفع لأي خادم"}
           </p>
         </div>

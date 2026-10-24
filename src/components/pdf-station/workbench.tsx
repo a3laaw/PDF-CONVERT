@@ -138,7 +138,11 @@ function extLabel(name: string): string {
 
 /* ─────────── المكوّن ─────────── */
 
-export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
+export function Workbench({
+  onOpenStudio,
+}: {
+  onOpenStudio: (v: "cad-dwg" | "cad-rvt" | "cad-adobe") => void;
+}) {
   const files = useWorkspace((s) => s.files);
   const results = useWorkspace((s) => s.results);
   const runState = useWorkspace((s) => s.runState);
@@ -208,7 +212,19 @@ export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
 
   const pickTool = (id: OpId | "convert") => {
     if (id === "convert") {
-      onOpenConvert();
+      /* توجيه ذكي: حسب نوع الملف المحدد — نفس فكرة الاستوديوهات */
+      const probe =
+        activeFile ??
+        files.find((f) => effectiveSel.has(f.id)) ??
+        null;
+      const ext = probe ? (probe.name.split(".").pop() || "").toLowerCase() : "";
+      onOpenStudio(
+        ext === "rvt"
+          ? "cad-rvt"
+          : ext === "dxf" || ext === "dwg" || probe?.kind === "cad"
+            ? "cad-dwg"
+            : "cad-adobe"
+      );
       return;
     }
     setTool(id);
@@ -272,7 +288,7 @@ export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
     else if (activeFile?.kind === "image")
       toast.info("الأداة دي لملفات PDF — للصور استخدم «من صور»");
     else if (activeFile && activeFile.kind !== "pdf")
-      toast.info("النوع ده يتحول أولًا من تبويب «تحويل»");
+      toast.info("النوع ده يُعرض ويتحول من استوديوهات أوتوكاد وريفيت وأدوبي في الأعلى");
     else toast.info("حدّد ملف PDF من قائمة الملفات أولًا");
   };
 
@@ -568,7 +584,7 @@ export function Workbench({ onOpenConvert }: { onOpenConvert: () => void }) {
                 {activeFile?.kind === "image"
                   ? "الصور تتحول إلى PDF بأداة «من صور»"
                   : activeFile && activeFile.kind !== "pdf"
-                    ? "الأنواع الأخرى تتحول من تبويب «تحويل»"
+                    ? "الأنواع الأخرى تُعرض وتتحول من الاستوديوهات في الأعلى"
                     : "اختر أداة من الشريط"}
               </span>
             )}

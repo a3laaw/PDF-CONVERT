@@ -6,6 +6,7 @@ Usage:
   python3 convert_to_pdf.py convert <input_file> <output_pdf> [thumb_png]
   python3 convert_to_pdf.py merge <output_pdf> <input1> <input2> ...
   python3 convert_to_pdf.py unmark <input_pdf> <output_pdf> [texts_csv] [annots 1/0]
+  python3 convert_to_pdf.py preview <input_file> <output_png>
 Protocol: prints "@@RESULT@@{json}" as the LAST stdout line.
 """
 import sys, os, io, json, re, struct, subprocess, datetime
@@ -671,6 +672,202 @@ def cmd_unmark(inp, outp, texts_raw='', annots='1'):
                         'Output size': human_size(os.path.getsize(outp))})
     doc.close()
 
+# ---------------------------------------------------------------- fast preview
+def _preview_kind(data: bytes, ext: str) -> str:
+    """كشف النوع من المحتوى أولًا والامتداد احتياطًا (نفس فلسفة sniffKind في الواجهة)"""
+    if data[:6].decode('ascii', 'ignore') in DWG_VERSIONS:
+        return 'dwg'
+    head = data[:4096]
+    if head.startswith(b'AutoCAD Binary DXF'):
+        return 'dxf'
+    if b'$ACADVER' in head or re.match(rb'\s*0\r?\n(SECTION|EOF|COMMENT)', head):
+        return 'dxf'
+    if data[:4] == b'8BPS':
+        return 'psd'
+    if head.startswith(b'%!PS'):
+        return 'ai' if (b'Illustrator' in head[:2048] or ext == 'ai') else 'eps'
+    if data[:4] == b'\xd0\xcf\x11\xe0':
+        return ext if ext in ('rvt',) else 'rvt'
+    return ext
+
+def _save_preview_png(img, out_png, max_w=1600):
+    im = flatten_white(img)
+    if im.width > max_w:
+        h = max(1, int(im.height * max_w / im.width))
+        im = im.resize((max_w, h))
+    im.convert('RGB').save(out_png, 'PNG')
+
+def _render_dxf_png(inp, out_png):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from ezdxf import recover
+    from ezdxf.addons.drawing import RenderContext, Frontend
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+    from ezdxf.addons.drawing.config import Configuration, BackgroundPolicy, ColorPolicy
+    doc, _auditor = recover.readfile(inp)
+    cfg = (Configuration(background_policy=BackgroundPolicy.WHITE,
+                         color_policy=ColorPolicy.BLACK))
+    fig = plt.figure(figsize=(13.33, 7.5), dpi=130)
+    ax = fig.add_axes([0, 0, 1, 1])
+    out = MatplotlibBackend(ax)
+    Frontend(RenderContext(doc), out, config=cfg).draw_layout(doc.modelspace(), finalize=True)
+    fig.savefig(out_png, dpi=130, facecolor='white')
+    plt.close(fig)
+
+def _rvt_preview_image(data, info):
+    import olefile
+    img = None
+    bio = io.BytesIO(data)
+    if olefile.isOleFile(bio):
+        ole = olefile.OleFileIO(bio)
+        try:
+            streams = ['/'.join(s) for s in ole.listdir()]
+            info['OLE streams'] = str(len(streams))
+            basic = [s for s in streams if 'BasicFileInfo' in s]
+            if basic:
+                raw = ole.openstream(basic[0]).read()
+                m = re.search(rb'Revit[^\d]{0,12}(\d{4})', raw) or re.search(rb'(\d{4})', raw)
+                if m:
+                    info['Revit version'] = m.group(1).decode()
+            for s in [x for x in streams
+                      if ('review' in x.lower()) or ('thumb' in x.lower())]:
+                try:
+                    img = scan_embedded_image(ole.openstream(s).read())
+                    if img:
+                        info['Preview source'] = s
+                        break
+                except Exception:
+                    continue
+        finally:
+            ole.close()
+    if img is None:
+        img = scan_embedded_image(data)
+    return img
+
+def cmd_preview(inp, out_png):
+    """صورة معاينة سريعة للعرض داخل الاستوديوهات — بدون تحويل كامل.
+    تكتب PNG عند توفر معاينة، وترد دائمًا JSON صادق (Quality: vector/flatten/preview/none)."""
+    from PIL import Image as PILImage  # noqa: F401 (يتأكد من توفر Pillow مبكرًا)
+    with open(inp, 'rb') as f:
+        data = f.read()
+    ext = (os.path.splitext(inp)[1][1:] or '').lower()
+    kind = _preview_kind(data, ext)
+    quality = 'preview'
+    RESULT['info'] = {'Kind': kind, 'File size': human_size(len(data))}
+    img = None
+
+    if kind == 'dxf':
+        quality = 'vector'
+        RESULT['info']['Format'] = 'DXF'
+        try:
+            from ezdxf import recover
+            doc, _ = recover.readfile(inp)
+            RESULT['info']['DXF version'] = doc.dxfversion or '?'
+            RESULT['info']['Entities (model)'] = str(len(doc.modelspace()))
+        except Exception:
+            pass
+        _render_dxf_png(inp, out_png)
+        RESULT['note_ar'] = ('معاينة متجهية للتخطيط الأول (Model) — الأصل خطوط حقيقية '
+                             'تتحمل أي تكبير بدون فقدان.')
+    elif kind == 'dwg':
+        ver_raw = data[:6].decode('ascii', 'ignore')
+        ver = DWG_VERSIONS.get(ver_raw, ver_raw or '?')
+        RESULT['info']['Format'] = 'AutoCAD DWG'
+        RESULT['info']['Version'] = ver
+        try:
+            img = extract_dwg_preview(data)
+        except Exception as e:
+            print('dwg preview error:', e, file=sys.stderr)
+        if img is not None:
+            RESULT['note_ar'] = ('المعاينة المدمجة التي يحفظها AutoCAD داخل الملف — '
+                                 'تكفي للفحص قبل الطباعة، والجودة المتجهية الكاملة تتطلب DXF.')
+        else:
+            quality = 'none'
+            RESULT['note_ar'] = ('لا توجد معاينة مدمجة داخل هذا الملف — التحويل سيُنتج صفحة '
+                                 'معلومات فقط، والأفضل تصدير DXF من AutoCAD.')
+    elif kind == 'rvt':
+        RESULT['info']['Format'] = 'Autodesk Revit (RVT)'
+        img = _rvt_preview_image(data, RESULT['info'])
+        if img is not None:
+            RESULT['note_ar'] = ('معاينة المشروع المدمجة من داخل حاوية RVT — صيغة RVT مغلقة '
+                                 'والتصدير الكامل يتم من داخل Revit عبر File > Export > PDF.')
+        else:
+            quality = 'none'
+            RESULT['note_ar'] = ('لم يُعثر على معاينة مدمجة قابلة للاستخراج — صيغة RVT تتطلب '
+                                 'برنامج Revit نفسه للتصدير الكامل.')
+    elif kind == 'psd':
+        RESULT['info']['Format'] = 'Photoshop PSD'
+        try:
+            from psd_tools import PSDImage
+            psd = PSDImage.open(inp)
+            img = flatten_white(psd.composite())
+            RESULT['info']['Canvas'] = '%dx%d px' % psd.size
+            RESULT['info']['Layers'] = str(len(list(psd.descendants())))
+        except Exception as e:
+            print('psd-tools preview fallback:', e, file=sys.stderr)
+        if img is None:
+            img = flatten_white(PILImage.open(inp))
+            RESULT['info']['Canvas'] = '%dx%d px' % img.size
+        quality = 'flatten'
+        RESULT['note_ar'] = 'معاينة الطبقات مدموجة على خلفية بيضاء — التحويل ينتج نفس الدمج بجودة أصلية.'
+    elif kind == 'ai':
+        import fitz
+        try:
+            doc = fitz.open(inp)
+            if doc.needs_pass:
+                raise RuntimeError('encrypted PDF/AI file')
+            RESULT['info']['Format'] = 'Adobe Illustrator'
+            RESULT['info']['Pages'] = str(doc.page_count)
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            pix.save(out_png)
+            doc.close()
+            quality = 'vector'
+            RESULT['note_ar'] = 'معاينة الصفحة الأولى — ملفات AI الحديثة متوافقة مع PDF وتتحول متجهيًا كاملًا.'
+        except Exception as e:
+            print('ai fitz preview fallback gs:', e, file=sys.stderr)
+            r = subprocess.run(
+                ['gs', '-q', '-dSAFER', '-dBATCH', '-dNOPAUSE', '-dNOPROMPT',
+                 '-sDEVICE=png16m', '-r110', '-dEPSCrop', '-o', out_png, inp],
+                capture_output=True, timeout=120)
+            if r.returncode != 0 or not os.path.exists(out_png):
+                raise RuntimeError('Ghostscript failed: ' + r.stderr.decode('utf8', 'ignore')[:200])
+            quality = 'vector'
+            RESULT['info']['Format'] = 'Adobe Illustrator'
+            RESULT['note_ar'] = 'معاينة عبر Ghostscript — الصفحة الأولى فقط.'
+    elif kind == 'eps':
+        r = subprocess.run(
+            ['gs', '-q', '-dSAFER', '-dBATCH', '-dNOPAUSE', '-dNOPROMPT',
+             '-sDEVICE=png16m', '-r110', '-dEPSCrop', '-o', out_png, inp],
+            capture_output=True, timeout=120)
+        if r.returncode != 0 or not os.path.exists(out_png):
+            raise RuntimeError('Ghostscript failed: ' + r.stderr.decode('utf8', 'ignore')[:200])
+        quality = 'vector'
+        RESULT['info']['Format'] = 'EPS/PS'
+        RESULT['note_ar'] = 'معاينة عبر Ghostscript مع احترام حدود الرسم (EPSCrop).'
+    else:
+        # INDD وأنواع غير معروفة: أكبر صورة مدمجة (أفضل جهد)
+        RESULT['info'].setdefault('Format', ext.upper() or 'غير معروف')
+        try:
+            img = scan_embedded_image(data)
+        except Exception as e:
+            print('generic preview scan error:', e, file=sys.stderr)
+        if img is not None:
+            RESULT['note_ar'] = 'معاينة مدمجة (أكبر صورة داخل الملف) — أفضل جهد ممكن خارج البرنامج الأصلي.'
+        else:
+            quality = 'none'
+            RESULT['note_ar'] = ('لم يُعثر على معاينة مدمجة — التصدير المطابق يتطلب البرنامج الأصلي '
+                                 'ثم ارفع الناتج PDF هنا.')
+
+    if os.path.exists(out_png) and os.path.getsize(out_png) > 0:
+        RESULT.update(ok=True, engine='cad-preview', pages=1)
+    elif img is not None:
+        _save_preview_png(img, out_png)
+        RESULT.update(ok=True, engine='cad-preview', pages=1)
+    else:
+        RESULT.update(ok=True, engine='cad-preview', pages=0)
+    RESULT['info']['Quality'] = quality
+
 def main():
     try:
         argv = sys.argv[1:]
@@ -687,6 +884,8 @@ def main():
             cmd_unmark(argv[1], argv[2],
                        argv[3] if len(argv) > 3 else '',
                        argv[4] if len(argv) > 4 else '1')
+        elif argv[0] == 'preview':
+            cmd_preview(argv[1], argv[2])
         else:
             RESULT['error'] = 'unknown command: ' + argv[0]
     except FileNotFoundError as e:

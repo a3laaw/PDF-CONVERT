@@ -151,6 +151,32 @@ export interface UnmarkReport {
   hits: number;
 }
 
+/** معاينة سريعة بلا تحويل: أمر preview في المحرك يكتب PNG ويصف الجودة بصدق */
+export interface EnginePreview {
+  ok: boolean;
+  kind: string;
+  quality: string; // vector | flatten | preview | none
+  note: string;
+  info: Record<string, string>;
+  error?: string;
+}
+
+export async function enginePreview(
+  inputPath: string,
+  pngPath: string
+): Promise<EnginePreview> {
+  const proc = await runEngine(["preview", inputPath, pngPath], 150_000);
+  const r = parseEngineResult(proc.stdout);
+  return {
+    ok: r.ok,
+    kind: r.info["Kind"] || "",
+    quality: r.info["Quality"] || "",
+    note: r.note_ar,
+    info: r.info,
+    error: r.error || undefined,
+  };
+}
+
 /** حذف العلامة المائية: نصوص + طوابع/تعليقات عبر أمر unmark في المحرك */
 export async function engineUnmark(
   inputPath: string,
