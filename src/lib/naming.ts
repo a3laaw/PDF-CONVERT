@@ -20,6 +20,8 @@ export const OP_SUFFIX: Partial<Record<OpId, string>> = {
   extract_text: "نص",
   image_resize: "بعد-الأبعاد",
   image_crop: "بعد-القص",
+  merge_pages: "صفحات-مختارة",
+  ocr: "نص-ممسوح",
 };
 
 /** إزالة الامتداد */
@@ -45,6 +47,8 @@ export function resultName(op: OpId, fileName: string, index = 0, ext?: string):
       return `${base}.pdf`;
     case "extract_text":
       return `${base}-نص.txt`;
+    case "ocr":
+      return `${base}-نص-ممسوح.txt`;
     case "image_convert":
       return `${base}${ext ?? ".jpg"}`;
     default: {

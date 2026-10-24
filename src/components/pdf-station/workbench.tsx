@@ -10,6 +10,7 @@ import { resultName } from "@/lib/naming";
 import { downloadBlob, openBlobInNewTab, pageQuickAction, pdfPageThumbs } from "@/lib/pdf-engine";
 import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
 import { SplitPanel } from "@/components/pdf-station/split-panel";
+import { MergePagesPanel } from "@/components/pdf-station/merge-pages-panel";
 import { toHindiDigits } from "@/lib/arabic";
 import { toast } from "sonner";
 import type { FileKind, OpId, ResultFile } from "@/lib/types";
@@ -39,6 +40,13 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   compress: svg(<path d="M4 9h16M4 15h10M9 4l-4 5 4 5" />),
   merge: svg(
     <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+  ),
+  merge_pages: svg(
+    <>
+      <rect x="3" y="3" width="9" height="9" rx="2" />
+      <rect x="12" y="12" width="9" height="9" rx="2" />
+      <path d="M13.5 7.5h5M16 5v5" />
+    </>
   ),
   split: svg(
     <>
@@ -107,12 +115,20 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
       <path d="M14 3v6h6M9 13h6M9 17h4" />
     </>
   ),
+  ocr: svg(
+    <>
+      <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+      <circle cx="11.5" cy="11.5" r="3" />
+      <path d="m13.8 13.8 2.7 2.7" />
+    </>
+  ),
 };
 
 const TOOLBAR: { id: OpId | "editor"; label: string }[] = [
   { id: "editor", label: "تعديل" },
   { id: "compress", label: "تصغير" },
   { id: "merge", label: "دمج" },
+  { id: "merge_pages", label: "دمج صفحات" },
   { id: "split", label: "فصل" },
   { id: "extract", label: "استخراج" },
   { id: "delete", label: "حذف" },
@@ -127,12 +143,14 @@ const TOOLBAR: { id: OpId | "editor"; label: string }[] = [
   { id: "image_resize", label: "أبعاد" },
   { id: "image_crop", label: "قص" },
   { id: "extract_text", label: "نص" },
+  { id: "ocr", label: "OCR" },
 ];
 
 /* المرحلة 2 — الأدوات السياقية: لكل قسم زرّه الخاص بفعله العربي، لا يظهر إلا داخل قسمه */
 const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
   compress: { verb: "صغّر الحجم" },
   merge: { verb: "ادمج الملفات" },
+  merge_pages: { verb: "ادمج الصفحات المختارة" },
   extract: { verb: "استخرج الصفحات" },
   delete: { verb: "احذف الصفحات" },
   rotate: { verb: "دوّر الصفحات" },
@@ -146,6 +164,7 @@ const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
   image_resize: { verb: "غيّر الأبعاد" },
   image_crop: { verb: "اقتصّ الصورة" },
   extract_text: { verb: "استخرج النص" },
+  ocr: { verb: "اقرأ النص الممسوح" },
 };
 
 /* الأدوات التي تعمل على صفحات محددة — زرّها يعرض عدد الصفحات المختارة */
@@ -293,8 +312,9 @@ export function Workbench() {
   const editorEnabled =
     activeFile?.kind === "pdf" || activeFile?.kind === "image";
 
-  /* وضع الفصل البصري بعمودين */
+  /* وضع الفصل البصري بعمودين + وضع دمج الصفحات من عدة ملفات (المرحلة 3) */
   const splitMode = tool === "split" && activeFile?.kind === "pdf";
+  const mergePagesMode = tool === "merge_pages";
 
   const pickTool = (id: OpId) => {
     setTool(id);
@@ -353,6 +373,8 @@ export function Workbench() {
   const toolEnabled = (id: OpId): boolean => {
     const t = TOOLS_BY_ID[id];
     if (!t) return false;
+    /* دمج الصفحات يعمل على كل ملفات PDF في المساحة — لا يشترط تحديدًا */
+    if (id === "merge_pages") return files.some((f) => f.kind === "pdf");
     for (const k of selKinds) if (t.accepts.includes(k)) return true;
     return false;
   };
@@ -360,6 +382,10 @@ export function Workbench() {
   const hintDisabled = (id: OpId) => {
     const t = TOOLS_BY_ID[id];
     if (!t) return;
+    if (id === "merge_pages") {
+      toast.info("أضف ملف PDF أولًا — الأداة تجمع صفحات من عدة ملفات في ملف واحد");
+      return;
+    }
     if (t.accepts.includes("image") && !t.accepts.includes("pdf"))
       toast.info("الأداة دي للصور — حدّد صورة من قائمة الملفات");
     else if (activeFile?.kind === "image")
@@ -532,8 +558,8 @@ export function Workbench() {
                     }
                     if (ok) {
                       setEditing(false);
-                      /* النقر على «فصل» وهي مفتوحة يغلقها */
-                      if (id === "split" && tool === "split") setTool(null);
+                      /* النقر على «فصل» أو «دمج صفحات» وهي مفتوحة يغلقها */
+                      if ((id === "split" || id === "merge_pages") && tool === id) setTool(null);
                       else pickTool(id);
                     } else hintDisabled(id);
                   }}
@@ -638,6 +664,13 @@ export function Workbench() {
                   fileName={activeFile.name}
                   file={activeFile.file}
                   pages={activeFile.pages ?? thumbs[activeFile.id]?.length ?? 1}
+                  onClose={() => setTool(null)}
+                />
+              </div>
+            ) : mergePagesMode ? (
+              <div className="lg:col-span-2">
+                <MergePagesPanel
+                  files={files.filter((f) => f.kind === "pdf")}
                   onClose={() => setTool(null)}
                 />
               </div>
@@ -765,7 +798,7 @@ export function Workbench() {
             )}
 
             {/* الجوال — شريط الصفحات الأفقي بأزرار الأفعال السريعة (الرِيل المخفي تحت 1024px) */}
-            {activeFile?.kind === "pdf" && !editing && !splitMode && (
+            {activeFile?.kind === "pdf" && !editing && !splitMode && !mergePagesMode && (
               <div className="lg:hidden">
                 <p className="px-1 pb-1.5 text-[11px] font-bold text-muted-foreground">
                   الصفحات — مرّر أفقيًا واضغط على أي إجراء
@@ -834,7 +867,7 @@ export function Workbench() {
           </div>
 
           {/* ─── الشريط السفلي: قسم الأداة + زرّها السياقي + اسم النتيجة (يُخفى أثناء التعديل والفصل) ─── */}
-          {!editing && !splitMode && (
+          {!editing && !splitMode && !mergePagesMode && (
             <>
               <div
                 ref={bottomBarRef}
@@ -843,6 +876,16 @@ export function Workbench() {
             {tool === "remove_watermark" && (
               <span className="w-full text-[10px] text-muted-foreground">
                 هذه الأداة تعالج الملف على الخادم ويُحذف فور انتهاء التنفيذ — والعلامات المرسومة داخل صور قد لا تُحذف
+              </span>
+            )}
+            {tool === "extract_text" && activeFile?.scanned && (
+              <span className="w-full text-[10px] font-bold text-amber-600">
+                هذا الملف ممسوح ضوئيًا بلا طبقة نص — النتيجة ستكون فارغة تقريبًا؛ استخدم أداة «OCR» من الشريط لتقرأ النص
+              </span>
+            )}
+            {tool === "ocr" && (
+              <span className="w-full text-[10px] text-muted-foreground">
+                القراءة تجري داخل متصفحك وتقريبية — راجع النص قبل الاعتماد، وإن ضعفت النتيجة جرّب تغيير اللغة فوق
               </span>
             )}
             {tool ? (

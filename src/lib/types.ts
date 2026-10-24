@@ -20,7 +20,9 @@ export type OpId =
   | "nup"
   | "image_convert"
   | "image_resize"
-  | "image_crop";
+  | "image_crop"
+  | "merge_pages"
+  | "ocr";
 
 /** ملف داخل مساحة العمل */
 export interface WorkspaceFile {

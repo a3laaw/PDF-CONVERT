@@ -85,6 +85,13 @@ const INTENTS: Intent[] = [
       /حجم اقل|compress/.test(t) || hasWord(t, "صغر", "ضغط", "اضغط", "خفف", "اصغر", "قلل"),
   },
   {
+    op: "merge_pages",
+    priority: 4,
+    phrases: ["ادمج صفحة من هنا وصفحة من ملف آخر", "دمج صفحات من الملفات"],
+    match: (t) =>
+      /دمج صفحات|اجمع صفحات|اختر صفحات|صفحه من (هنا|ملف|اخر)/.test(t),
+  },
+  {
     op: "nup",
     priority: 4,
     phrases: ["صفحتين في الورقة", "عدة صفحات في الورقة"],
@@ -184,6 +191,13 @@ const INTENTS: Intent[] = [
     match: (t) =>
       /قص|اقتصاص|اقتص|crop/.test(t) &&
       /صور|image|مربع|1:1|4:3|3:4|16:9/.test(t),
+  },
+  {
+    op: "ocr",
+    priority: 18,
+    phrases: ["اقرأ نص الملف الممسوح ضوئيًا", "استخرج نص الصورة OCR"],
+    match: (t) =>
+      /ocr|مسح ضوئي|ممسوح ضوئي|نص من صور|اقرا النص|قراءه النص|صوره مكتوبه/.test(t),
   },
 ];
 
@@ -285,6 +299,15 @@ function extractParams(op: OpId, original: string): Record<string, string> {
               : "1:1";
       break;
     }
+    case "ocr": {
+      if (/انجليزي|english/.test(t) && !/عربي/.test(t)) params.lang = "eng";
+      else if (/عربي/.test(t) && !/انجليزي|english/.test(t)) params.lang = "ara";
+      else params.lang = "ara+eng";
+      break;
+    }
+    case "merge_pages":
+      params.all = "1";
+      break;
     default:
       break;
   }
@@ -334,6 +357,10 @@ export function stepLabel(op: OpId, params: Record<string, string>, filesCount =
       return `تغيير الأبعاد (${params.value ?? "50%"})`;
     case "image_crop":
       return `قص الصورة بنسبة ${params.ratio ?? "1:1"}`;
+    case "merge_pages":
+      return "دمج صفحات من عدة ملفات";
+    case "ocr":
+      return "قراءة النص بالمسح الضوئي (OCR)";
     default:
       return tool.name;
   }
@@ -546,6 +573,15 @@ export function suggestRecipes(
       desc: "الملف ممسوح ضوئيًا — أضف ختم مسودة لحمايته من الاعتبار الرسمي",
       steps: [{ op: "watermark", params: { text: "مسودة", color: "رمادي" } }],
       icon: "🪣",
+    });
+  }
+  if (pdfs.some((f) => f.scanned)) {
+    out.push({
+      id: "r-ocr",
+      title: "الممسوح نص؟ اقرأه",
+      desc: "الملف ممسوح ضوئيًا بلا طبقة نص — استخرج كلامه بالقراءة الآلية OCR",
+      steps: [{ op: "ocr", params: { lang: "ara+eng" } }],
+      icon: "🔍",
     });
   }
   if (images.length >= 2) {

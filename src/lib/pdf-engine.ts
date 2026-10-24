@@ -356,6 +356,12 @@ export async function runOp(
   switch (op) {
     case "merge":
       return opMerge(inputs, label, ctx);
+    case "merge_pages":
+      /* المسار البصري عبر اللوحة يسمى mergePagesVisual مباشرة — هذا المسار للأوامر النصية فقط */
+      if (params.all === "1") return opMerge(inputs, label, ctx);
+      throw new Error("أداة «دمج صفحات من الملفات» بصرية — افتحها من الشريط واختر الصفحات من اللوحة");
+    case "ocr":
+      return opOcr(inputs, params, label, ctx);
     case "compress":
       return opCompress(inputs, params, label, ctx);
     case "extract":
@@ -628,6 +634,40 @@ export async function splitPagesVisual(file: File, pages: number[]): Promise<Spl
   const separated = await mk(chosen, `${base} — الصفحات-المفصولة.pdf`);
   const remainder = rest.length > 0 ? await mk(rest, `${base} — الصفحات-المتبقية.pdf`) : null;
   return { separated, remainder };
+}
+
+/* ─── المرحلة 3 — دمج صفحات من عدة ملفات بالترتيب المختار ───
+   «صفحة من هنا وصفحة من ملف آخر» — الطلب في القائمة هو الترتيب النهائي
+   وكل مصدر يُحمّل مرة واحدة مهما تكررت صفحاته */
+export async function mergePagesVisual(
+  picks: { file: File; page: number }[]
+): Promise<{ name: string; blob: Blob }> {
+  if (picks.length === 0) {
+    throw new Error("لم تختر أي صفحة — اختر صفحة واحدة على الأقل من اللوحة");
+  }
+  const out = await PDFDocument.create();
+  const cache = new Map<string, PDFDocument>();
+  for (const pick of picks) {
+    const key = `${pick.file.name}:${pick.file.size}`;
+    let src = cache.get(key);
+    if (!src) {
+      src = await loadPdfLib(
+        await bytesOf({ id: "", name: pick.file.name, kind: "pdf", file: pick.file })
+      );
+      cache.set(key, src);
+    }
+    const total = src.getPageCount();
+    if (pick.page < 1 || pick.page > total) {
+      throw new Error(
+        `الصفحة ${toHindiDigits(pick.page)} في «${pick.file.name}» غير موجودة — الملف فيه ${toHindiDigits(total)} صفحات`
+      );
+    }
+    const [copied] = await out.copyPages(src, [pick.page - 1]);
+    out.addPage(copied);
+  }
+  const saved = await out.save({ useObjectStreams: true });
+  const blob = new Blob([saved as unknown as BlobPart], { type: "application/pdf" });
+  return { name: "دمج-الصفحات-المختارة.pdf", blob };
 }
 
 /* ─── المرحلة 1 — شريط الصفحات الذكي: أفعال سريعة على صفحة واحدة ───
@@ -929,8 +969,7 @@ async function opPdfToImages(
 }
 
 /* استخراج النص */
-async function opExtractText(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {
-  const pdfjs = await getPdfjs();
+async function opExtractText(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {  const pdfjs = await getPdfjs();
   const results: ResultFile[] = [];
   for (const input of inputs) {
     ctx.onProgress?.(`جارٍ استخراج نصوص «${input.name}»…`);
@@ -952,6 +991,74 @@ async function opExtractText(inputs: EngineInput[], label: string, ctx: RunConte
     results.push(resultFile(resultName("extract_text", input.name), blob, label, "other"));
   }
   return results;
+}
+
+/* ─── OCR — قراءة النص من الصور والصفحات الممسوحة ضوئيًا ───
+   tesseract.js داخل المتصفح (خصوصية تامة) — عامل واحد يُعاد استخدامه لكل الصفحات
+   أول تشغيل يحمّل بيانات اللغة ثم تتخزّن في المتصفح */
+async function opOcr(
+  inputs: EngineInput[],
+  params: Record<string, string>,
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile[]> {
+  const lang = params.lang === "ara" || params.lang === "eng" ? params.lang : "ara+eng";
+  const Tesseract = await import("tesseract.js");
+  ctx.onProgress?.("تحضير محرك القراءة… (أول مرة يُحمّل ملف اللغة ثم يتخزّن)");
+  let worker: import("tesseract.js").Worker;
+  try {
+    worker = await Tesseract.createWorker(lang, 1, {
+      langPath: "https://tessdata.projectnaptha.com/4.0.0_fast",
+    });
+  } catch {
+    throw new Error(
+      "تعذّر تحميل بيانات اللغة لمحرك القراءة — يحتاج اتصالًا بالإنترنت أول مرة فقط، ثم جرّب مرة أخرى"
+    );
+  }
+  try {
+    const results: ResultFile[] = [];
+    for (const input of inputs) {
+      if (input.kind === "image") {
+        ctx.onProgress?.(`جارٍ قراءة نص «${input.name}»…`);
+        const bm = await loadBitmap(input.file);
+        try {
+          const canvas = canvasFromBitmap(bm);
+          fillWhite(canvas);
+          const { data } = await worker.recognize(canvas);
+          const text = data.text.replace(/\n{3,}/g, "\n\n").trim();
+          const blob = new Blob(["\ufeff" + text], { type: "text/plain;charset=utf-8" });
+          results.push(resultFile(resultName("ocr", input.name), blob, label, "other"));
+        } finally {
+          bm.close();
+        }
+        continue;
+      }
+      const pdfjs = await getPdfjs();
+      const bytes = await bytesOf(input);
+      const src = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+      const chunks: string[] = [];
+      for (let i = 1; i <= src.numPages; i++) {
+        ctx.onProgress?.(`قراءة نص الصفحة ${toHindiDigits(i)} من ${toHindiDigits(src.numPages)}…`);
+        const page = await src.getPage(i);
+        const viewport = page.getViewport({ scale: 2 });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const c2 = canvas.getContext("2d")!;
+        c2.fillStyle = "#ffffff";
+        c2.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+        const { data } = await worker.recognize(canvas);
+        chunks.push(`── الصفحة ${toHindiDigits(i)} ──\n${data.text.replace(/\n{3,}/g, "\n\n").trim()}`);
+      }
+      const text = chunks.join("\n\n");
+      const blob = new Blob(["\ufeff" + text], { type: "text/plain;charset=utf-8" });
+      results.push(resultFile(resultName("ocr", input.name), blob, label, "other"));
+    }
+    return results;
+  } finally {
+    await worker.terminate();
+  }
 }
 
 /* بيانات الملف */

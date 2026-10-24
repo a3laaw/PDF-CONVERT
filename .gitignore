@@ -67,6 +67,7 @@ scripts/.gh_*
 # LibreDWG build artifacts (434MB) — rebuild via scripts/build_libredwg.sh
 /scripts/build/
 # E2E screenshots & test outputs
+/scripts/t_in/
 /scripts/t_out/
 /scripts/gh_poll_token.py
 # local databases
