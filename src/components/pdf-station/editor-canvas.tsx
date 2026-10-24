@@ -15,6 +15,7 @@ import {
   type RealTextNorm,
 } from "@/lib/pdf-engine";
 import { toHindiDigits } from "@/lib/arabic";
+import { useI18n } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -76,7 +77,7 @@ interface TextAnno extends BaseAnno {
   size: number;
   text: string;
   /** نص PDF حقيقي: يُكتب بخط مضمّن بحجمه الأصلي بالنقاط — لا صورة */
-  real?: { sizePt: number };
+  real?: { sizePt: number; bold?: boolean };
 }
 type Anno = StrokeAnno | ShapeAnno | MaskAnno | TextAnno;
 
@@ -89,6 +90,17 @@ interface TypingBox {
   sizePt?: number;
   /** هل الحجم مأخوذ من النص المجاور؟ */
   snap?: boolean;
+  /** خط عريض مأخوذ من النص المجاور */
+  bold?: boolean;
+  /** وضع تعديل نص موجود: النقر على سطر يفتحه هنا، والتأكيد يخفيه ويكتب بديله */
+  edit?: {
+    orig: string;
+    /** حدود السطر الأصلي بإحداثيات PDF — لقناع الإخفاء */
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  };
 }
 
 interface EditorDoc {
@@ -168,16 +180,17 @@ const TOOL_ICONS: Record<ToolId, React.ReactNode> = {
   ),
   text: svg(<path d="M4 7V5h16v2M12 5v14M9 19h6" />),
 };
-const TOOL_LABEL: Record<ToolId, string> = {
-  select: "تحريك",
-  pen: "قلم",
-  highlight: "تظليل",
-  line: "خط",
-  arrow: "سهم",
-  rect: "مستطيل",
-  ellipse: "دائرة",
-  mask: "حجب",
-  text: "نص",
+/* مفاتيح أسماء الأدوات — الترجمة من القاموس عبر ed.tool.* */
+const TOOL_KEY: Record<ToolId, string> = {
+  select: "select",
+  pen: "pen",
+  highlight: "highlight",
+  line: "line",
+  arrow: "arrow",
+  rect: "rect",
+  ellipse: "ellipse",
+  mask: "mask",
+  text: "text",
 };
 const TOOL_ORDER: ToolId[] = [
   "select",
@@ -280,7 +293,7 @@ function drawAnno(
     ctx.textAlign = "right";
     ctx.textBaseline = "alphabetic";
     ctx.font = s.real
-      ? `400 ${s.size * pm}px ${fontFamily}` /* نفس وزن الخط المضمّن */
+      ? `${s.real.bold ? 700 : 400} ${s.size * pm}px ${fontFamily}` /* نفس وزن الخط المضمّن */
       : `700 ${s.size * pm}px ${fontFamily}`;
     ctx.fillText(s.text, s.x * w, s.y * h);
   }
@@ -374,6 +387,7 @@ interface Props {
 }
 
 export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClose, onSave }: Props) {
+  const { t } = useI18n();
   const wrapRef = useRef<HTMLDivElement>(null); // منطقة الكانفس القابلة للتمرير
   const baseRef = useRef<HTMLCanvasElement | null>(null); // طبقة الصفحة (عرض فقط)
   const liveRef = useRef<HTMLCanvasElement>(null); // طبقة الرسم التفاعلية
@@ -386,6 +400,8 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
   /* الحجب: لون القناع + حجم النص الحقيقي بالنقاط (يُقرأ من النص المجاور عند النقر) */
   const [maskColor, setMaskColor] = useState(MASK_COLORS[0].v);
   const [sizePt, setSizePt] = useState(14);
+  /* وزن الخط للنص الجديد: يُلتقط من النص المجاور عند النقر، ويُبدّل يدويًا من حقل الكتابة */
+  const [boldSnap, setBoldSnap] = useState(false);
   /* أبعاد الصفحة الحالية بوحدات PDF — لتحويل ‰ ↔ نقاط */
   const pageDims = useRef<{ w: number; h: number }>({ w: 595, h: 842 });
   /* عناصر نص الصفحة الحالية — أساس مطابقة الحجم والحجب بالنقر (undefined = تحميل، فارغة = بلا نص) */
@@ -487,12 +503,15 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     }
     let alive = true;
     setPageInfo(undefined);
+    (window as unknown as { __edbg?: unknown }).__edbg = null;
     pageTextItems(file, page)
       .then((info) => {
         itemsCache.current.set(page, info);
+        (window as unknown as { __edbg?: unknown }).__edbg = info;
         if (alive) setPageInfo(info);
       })
-      .catch(() => {
+      .catch((err) => {
+        (window as unknown as { __edbg?: { err?: string } }).__edbg = { err: String(err) };
         if (alive)
           setPageInfo({ items: [], w: pageDims.current.w, h: pageDims.current.h });
       });
@@ -618,21 +637,35 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       /* نثبّت أي حقل مفتوح أولًا حتى لا يضيع نصه */
       if (typingRef.current) commitText(typingRef.current.id);
       const tid = ++typingSeq.current;
-      /* مطابقة الحجم: نقرأ حجم النص المجاور وأساس سطره من بيانات الصفحة الحقيقية */
+      /* مطابقة الحجم والوزن: نقرأها من النص المجاور من بيانات الصفحة الحقيقية */
       const near = kind === "pdf" ? hitTextItem(x, y, 10) : null;
       if (near) {
         const pt = Math.round(near.sizePt * 10) / 10;
         setSizePt(pt);
+        if (near.bold) setBoldSnap(true);
+        else setBoldSnap(false);
+        /* نقر على سطر موجود → وضع تعديل: النص يُعبّأ مسبقًا، والتأكيد يخفي الأصل ويكتب البديل بنفس الموضع */
+        const W = pageDims.current.w;
+        const H = pageDims.current.h;
+        const padPt = near.sizePt * 0.22;
         setTyping({
           id: tid,
           x,
           y: Math.min(1, Math.max(0, 1 - near.y / pageDims.current.h)),
-          value: "",
+          value: near.str,
           sizePt: pt,
           snap: true,
+          bold: near.bold,
+          edit: {
+            orig: near.str,
+            x0: Math.max(0, (near.x - padPt) / W),
+            y0: Math.max(0, 1 - (near.y + near.sizePt * 1.2 + padPt) / H),
+            x1: Math.min(1, (near.x + near.w + padPt) / W),
+            y1: Math.min(1, 1 - (near.y - padPt * 0.6) / H),
+          },
         });
       } else {
-        setTyping({ id: tid, x, y, value: "", sizePt });
+        setTyping({ id: tid, x, y, value: "", sizePt, bold: boldSnap });
       }
       /* منع الافتراضي: mousedown كان سيسرق التركيز فيمحو الحقل فور ظهوره */
       e.preventDefault();
@@ -723,11 +756,9 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
               y1: Math.min(1, 1 - (it.y - padPt * 0.6) / H),
             },
           ]);
-          toast.success(
-            `اتحجب: «${txt.slice(0, 24)}${txt.length > 24 ? "…" : ""}»`
-          );
+          toast.success(`${t("ed.tool.mask")}: «${txt.slice(0, 24)}${txt.length > 24 ? "…" : ""}»`);
         } else {
-          toast.info("مرّر فوق النص لتحجبه — النقرة وحدها تحجب السطر الذي تنقره");
+          toast.info(t("ed.hint"));
         }
         repaint();
         return;
@@ -736,24 +767,55 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       repaint();
       return;
     }
-    const t = d as StrokeAnno | ShapeAnno;
+    const st = d as StrokeAnno | ShapeAnno;
     const tiny =
-      "pts" in t
-        ? t.pts.length < 2
-        : Math.abs(t.x2 - t.x1) < 0.004 && Math.abs(t.y2 - t.y1) < 0.004;
+      "pts" in st
+        ? st.pts.length < 2
+        : Math.abs(st.x2 - st.x1) < 0.004 && Math.abs(st.y2 - st.y1) < 0.004;
     if (!tiny) commit([...curList, d]);
     repaint();
   };
 
   const commitText = (id: number) => {
-    const t = typingRef.current;
-    if (!t || t.id !== id) return; /* حقل قديم — سبقه نقرة جديدة */
+    const tb = typingRef.current;
+    if (!tb || tb.id !== id) return; /* حقل قديم — سبقه نقرة جديدة */
     typingRef.current = null;
-    if (t.value.trim()) {
-      const pt = t.sizePt ?? sizePt;
+    const isPdf = kind === "pdf";
+    const pt = tb.sizePt ?? sizePt;
+    /* وضع تعديل نص موجود: تأكيد بنفس النص = إلغاء، وتأكيد بنص مغاير = إخفاء الأصل + كتابة البديل مكانه */
+    if (tb.edit) {
+      const next = tb.value.trim();
+      setTypingState(null);
+      if (!next || next === tb.edit.orig) return;
+      const base = curList;
+      const maskAnno: MaskAnno = {
+        id: uid(),
+        tool: "mask",
+        color: maskColor,
+        width: 0,
+        x0: tb.edit.x0,
+        y0: tb.edit.y0,
+        x1: tb.edit.x1,
+        y1: tb.edit.y1,
+      };
+      const textAnno: TextAnno = {
+        id: uid(),
+        tool: "text",
+        color,
+        width: size,
+        x: tb.x,
+        y: tb.y,
+        size: isPdf ? (pt / pageDims.current.h) * 1000 : textSize,
+        text: next,
+        real: isPdf ? { sizePt: pt, bold: tb.bold ?? boldSnap } : undefined,
+      };
+      commit([...base, maskAnno, textAnno]);
+      toast.success(t("ed.editedToast"));
+      return;
+    }
+    if (tb.value.trim()) {
       /* للـPDF: نص حقيقي بحجم النقاط الأصلي — ‰ للمعاينة تُشتق من أبعاد الصفحة
          للصورة: كما كان — حجم نسبي يُطبع في الـPNG */
-      const isPdf = kind === "pdf";
       commit([
         ...curList,
         {
@@ -761,11 +823,11 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           tool: "text",
           color,
           width: size,
-          x: t.x,
-          y: t.y,
+          x: tb.x,
+          y: tb.y,
           size: isPdf ? (pt / pageDims.current.h) * 1000 : textSize,
-          text: t.value.trim(),
-          real: isPdf ? { sizePt: pt } : undefined,
+          text: tb.value.trim(),
+          real: isPdf ? { sizePt: pt, bold: tb.bold ?? boldSnap } : undefined,
         },
       ]);
     }
@@ -803,7 +865,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       .map(Number)
       .filter((k) => (doc.annos[k] ?? []).length > 0);
     if (touched.length === 0) return;
-    setBusy("جارٍ الحفظ…");
+    setBusy(t("ed.saving"));
     try {
       if (kind === "pdf") {
         let bytes = new Uint8Array(await file.arrayBuffer()) as Uint8Array;
@@ -833,6 +895,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                 sizePt: s.real!.sizePt,
                 text: s.text,
                 color: s.color,
+                bold: s.real!.bold,
               });
             } else hasRaster = true;
           }
@@ -871,7 +934,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           bytes = await out.save();
         }
         const pdfBlob = new Blob([bytes as unknown as BlobPart], { type: "application/pdf" });
-        onSave(`${fileName.replace(/\.pdf$/i, "")} (معدّل).pdf`, pdfBlob);
+        onSave(`${fileName.replace(/\.pdf$/i, "")} (${t("ed.modifiedSuffix")}).pdf`, pdfBlob);
       } else {
         const base = baseRef.current!;
         const scale = Math.min(2.2, 2600 / base.width);
@@ -884,10 +947,10 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
         ctx.drawImage(base, 0, 0, c.width, c.height);
         for (const a of doc.annos[page] ?? []) drawAnno(ctx, a, c.width, c.height, getFam());
         const blob: Blob = await new Promise((res) => c.toBlob((b) => res(b!), "image/png"));
-        onSave(`${fileName.replace(/\.[^.]+$/, "")} (معدّل).png`, blob);
+        onSave(`${fileName.replace(/\.[^.]+$/, "")} (${t("ed.modifiedSuffix")}).png`, blob);
       }
     } catch {
-      toast.error("تعذّر الحفظ — جرّب مرة أخرى");
+      toast.error(t("ed.saveFail"));
     } finally {
       setBusy("");
     }
@@ -895,7 +958,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
 
   const maybeClose = () => {
     const hasAny = Object.values(doc.annos).some((v) => v.length > 0);
-    if (hasAny && !window.confirm("هناك تعديلات غير محفوظة — إغلاق بدون حفظ؟")) return;
+    if (hasAny && !window.confirm(t("ed.unsavedConfirm"))) return;
     onClose();
   };
 
@@ -906,18 +969,18 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       <button
         onClick={() => onPage(Math.max(1, page - 1))}
         disabled={page <= 1}
-        aria-label="الصفحة السابقة"
+        aria-label={t("qp.prevPage")}
         className="grid size-6 place-items-center rounded-md text-base font-extrabold text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
       >
         ›
       </button>
       <span className="min-w-[72px] text-center text-[11px] font-extrabold text-muted-foreground">
-        صفحة {toHindiDigits(page)} من {toHindiDigits(pages)}
+        {t("ed.pageOf", { n: toHindiDigits(page), total: toHindiDigits(pages) })}
       </span>
       <button
         onClick={() => onPage(Math.min(pages, page + 1))}
         disabled={page >= pages}
-        aria-label="الصفحة التالية"
+        aria-label={t("qp.nextPage")}
         className="grid size-6 place-items-center rounded-md text-base font-extrabold text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
       >
         ‹
@@ -938,15 +1001,15 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-white px-3 shadow-sm">
         <button
           onClick={maybeClose}
-          aria-label="إغلاق المحرر"
+          aria-label={t("ed.close")}
           className="grid size-9 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-red-50 hover:text-red-600"
         >
           <X className="size-5" aria-hidden />
         </button>
         <div className="min-w-0">
-          <p className="truncate text-sm font-extrabold leading-tight">تعديل: {fileName}</p>
+          <p className="truncate text-sm font-extrabold leading-tight">{t("ed.title")}: {fileName}</p>
           <p className="text-[10px] leading-tight text-muted-foreground">
-            {kind === "pdf" ? "PDF — حتى الماسوح ضوئيًا" : "صورة"} · الشغل داخل متصفحك
+            {kind === "pdf" ? t("ed.pdfNote") : t("ed.imageNote")} · {t("ed.inBrowser")}
           </p>
         </div>
         <span className="flex-1" />
@@ -956,8 +1019,8 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           <button
             onClick={undo}
             disabled={doc.past.length === 0}
-            aria-label="تراجع"
-            title="تراجع (Ctrl+Z)"
+            aria-label={t("ed.undo")}
+            title={t("ed.hintShortcuts")}
             className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
           >
             <Undo2 className="size-4" aria-hidden />
@@ -965,8 +1028,8 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           <button
             onClick={redo}
             disabled={doc.future.length === 0}
-            aria-label="إعادة"
-            title="إعادة (Ctrl+Y)"
+            aria-label={t("ed.redo")}
+            title={t("ed.hintShortcuts")}
             className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
           >
             <Redo2 className="size-4" aria-hidden />
@@ -975,7 +1038,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
         <div className="hidden items-center gap-0.5 rounded-xl border border-border bg-white px-1 py-0.5 md:flex">
           <button
             onClick={() => setZoom((z) => Math.max(0.4, z / 1.25))}
-            aria-label="تصغير"
+            aria-label={t("ed.zoomOut")}
             className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary"
           >
             <ZoomOut className="size-4" aria-hidden />
@@ -985,15 +1048,15 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           </span>
           <button
             onClick={() => setZoom((z) => Math.min(3, z * 1.25))}
-            aria-label="تكبير"
+            aria-label={t("ed.zoomIn")}
             className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary"
           >
             <ZoomIn className="size-4" aria-hidden />
           </button>
           <button
             onClick={() => setZoom(1)}
-            aria-label="ملء العرض"
-            title="ملء العرض"
+            aria-label={t("ed.fit")}
+            title={t("ed.fit")}
             className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary"
           >
             <Maximize className="size-4" aria-hidden />
@@ -1006,7 +1069,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           className="bg-emerald-600 px-4 font-extrabold text-white hover:bg-emerald-700"
         >
           <Check className="size-4" aria-hidden />
-          {busy || "حفظ التعديلات"}
+          {busy || t("ed.save")}
         </Button>
       </div>
 
@@ -1014,24 +1077,24 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       <div className="flex min-h-0 flex-1 max-md:flex-col">
         {/* شريط الأدوات الجانبي (يمين) */}
         <div className="flex shrink-0 gap-1.5 overflow-x-auto border-l border-border bg-white p-2 max-md:border-b max-md:border-l-0 md:w-[84px] md:flex-col md:overflow-y-auto">
-          {TOOL_ORDER.map((t) => (
+          {TOOL_ORDER.map((tl) => (
             <button
-              key={t}
+              key={tl}
               onClick={() => {
-                setTool(t);
-                if (t !== "select") setSelectedId(null);
+                setTool(tl);
+                if (tl !== "select") setSelectedId(null);
               }}
-              aria-label={TOOL_LABEL[t]}
-              title={TOOL_LABEL[t]}
+              aria-label={t(`ed.tool.${TOOL_KEY[tl]}`)}
+              title={t(`ed.tool.${TOOL_KEY[tl]}`)}
               className={cn(
                 "flex shrink-0 flex-col items-center gap-0.5 rounded-xl px-2.5 py-2 text-[9px] font-extrabold transition",
-                tool === t
+                tool === tl
                   ? "bg-primary text-primary-foreground shadow-md shadow-primary/25"
                   : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
               )}
             >
-              {TOOL_ICONS[t]}
-              {TOOL_LABEL[t]}
+              {TOOL_ICONS[tl]}
+              {t(`ed.tool.${TOOL_KEY[tl]}`)}
             </button>
           ))}
           <span className="mx-1 hidden w-px bg-border md:block" aria-hidden />
@@ -1041,8 +1104,8 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
               <button
                 key={c.v}
                 onClick={() => setColor(c.v)}
-                aria-label={`لون ${c.label}`}
-                title={`لون ${c.label}`}
+                aria-label={`${t("ed.colorPrefix")} ${c.label}`}
+                title={`${t("ed.colorPrefix")} ${c.label}`}
                 className={cn(
                   "size-6 shrink-0 rounded-full border-2 transition",
                   c.dot,
@@ -1051,14 +1114,14 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
               />
             ))}
             <label
-              title="لون مخصص"
+              title={t("ed.customColor")}
               className="relative grid size-6 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-full border-2 border-white bg-gradient-to-br from-rose-400 via-amber-300 to-sky-400 shadow"
             >
               <input
                 type="color"
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
-                aria-label="لون مخصص"
+                aria-label={t("ed.customColor")}
                 className="absolute inset-0 cursor-pointer opacity-0"
               />
             </label>
@@ -1071,8 +1134,8 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                   <button
                     key={s.v}
                     onClick={() => setMaskColor(s.v)}
-                    aria-label={`قناع ${s.label}`}
-                    title={`قناع ${s.label}`}
+                    aria-label={`${t("ed.maskPrefix")} ${s.label}`}
+                    title={`${t("ed.maskPrefix")} ${s.label}`}
                     className={cn(
                       "flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-extrabold",
                       maskColor === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
@@ -1116,12 +1179,12 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           <button
             onClick={() => curList.length > 0 && commit([])}
             disabled={curList.length === 0}
-            aria-label="مسح هذه الصفحة"
-            title="مسح هذه الصفحة"
+            aria-label={t("ed.clearPage")}
+            title={t("ed.clearPage")}
             className="flex shrink-0 items-center gap-1 rounded-xl px-2.5 py-2 text-[9px] font-extrabold text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:opacity-30 md:flex-col"
           >
             <Trash2 className="size-5" aria-hidden />
-            مسح الصفحة
+            {t("ed.clearPage")}
           </button>
         </div>
 
@@ -1157,7 +1220,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                       ? "cursor-text"
                       : "cursor-crosshair"
                 )}
-                aria-label="لوحة التعديل"
+                aria-label={t("ed.title")}
               />
               {/* صندوق تحديد العنصر */}
               {selItem &&
@@ -1176,13 +1239,98 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                       }}
                     >
                       <div className="absolute inset-0 rounded-sm border-2 border-dashed border-primary/70" />
+                      {/* أدوات دقيقة للنص المحدد: حجم أكبر/أصغر + وزن عريض */}
+                      {selItem.tool === "text" && (
+                        <div className="pointer-events-auto absolute -top-10 left-0 flex items-center gap-0.5 rounded-lg border border-border bg-white px-1 py-0.5 shadow-lg">
+                          <button
+                            onClick={() => {
+                              const s = selItem as TextAnno;
+                              const pt = Math.max(4, (s.real?.sizePt ?? 14) - 1);
+                              commit(
+                                curList.map((a) =>
+                                  a.id === selItem.id
+                                    ? {
+                                        ...(a as TextAnno),
+                                        size: (pt / pageDims.current.h) * 1000,
+                                        real: s.real
+                                          ? { ...s.real, sizePt: pt }
+                                          : { sizePt: pt },
+                                      }
+                                    : a
+                                )
+                              );
+                            }}
+                            aria-label={t("ed.textSmaller")}
+                            title={t("ed.textSmaller")}
+                            className="grid size-6 place-items-center rounded-md text-xs font-extrabold text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                          >
+                            −
+                          </button>
+                          <span className="min-w-[34px] text-center text-[10px] font-extrabold text-muted-foreground">
+                            {toHindiDigits(Math.round((selItem as TextAnno).real?.sizePt ?? 14))}pt
+                          </span>
+                          <button
+                            onClick={() => {
+                              const s = selItem as TextAnno;
+                              const pt = Math.min(96, (s.real?.sizePt ?? 14) + 1);
+                              commit(
+                                curList.map((a) =>
+                                  a.id === selItem.id
+                                    ? {
+                                        ...(a as TextAnno),
+                                        size: (pt / pageDims.current.h) * 1000,
+                                        real: s.real
+                                          ? { ...s.real, sizePt: pt }
+                                          : { sizePt: pt },
+                                      }
+                                    : a
+                                )
+                              );
+                            }}
+                            aria-label={t("ed.textBigger")}
+                            title={t("ed.textBigger")}
+                            className="grid size-6 place-items-center rounded-md text-xs font-extrabold text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                          >
+                            +
+                          </button>
+                          <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+                          <button
+                            onClick={() =>
+                              commit(
+                                curList.map((a) =>
+                                  a.id === selItem.id
+                                    ? {
+                                        ...(a as TextAnno),
+                                        real: {
+                                          sizePt:
+                                            (a as TextAnno).real?.sizePt ?? 14,
+                                          bold: !((a as TextAnno).real?.bold ?? false),
+                                        },
+                                      }
+                                    : a
+                                )
+                              )
+                            }
+                            aria-label={t("ed.toggleBold")}
+                            title={t("ed.toggleBold")}
+                            className={cn(
+                              "grid size-6 place-items-center rounded-md text-[11px] font-extrabold",
+                              (selItem as TextAnno).real?.bold
+                                ? "bg-primary text-white"
+                                : "text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                            )}
+                          >
+                            B
+                          </button>
+                        </div>
+                      )}
                       <button
                         onClick={() => {
                           commit(curList.filter((a) => a.id !== selItem.id));
                           setSelectedId(null);
                         }}
-                        aria-label="حذف المحدد"
-                        title="حذف (Delete)"
+                        aria-label={t("ed.deleteSelected")}
+                        title={t("ed.deleteSelected")}
                         className="pointer-events-auto absolute -top-10 right-0 grid size-8 place-items-center rounded-lg bg-red-500 text-white shadow-lg hover:bg-red-600"
                       >
                         <Trash2 className="size-4" aria-hidden />
@@ -1210,7 +1358,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                       if (e.key === "Escape") setTyping(null);
                     }}
                     onBlur={() => commitText(typing.id)}
-                    placeholder="اكتب ثم Enter"
+                    placeholder={t("ed.typeAndEnter")}
                     style={{
                       color,
                       fontSize: `${Math.max(
@@ -1224,7 +1372,13 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                   />
                   {kind === "pdf" && (
                     <span className="flex w-fit items-center gap-1 rounded-lg border border-border bg-white/95 px-2 py-0.5 text-[10px] font-extrabold text-muted-foreground shadow">
-                      {typing.snap ? "حجم النص هنا" : "حجم الخط"}
+                      {typing.edit ? (
+                        <b className="text-amber-600">{t("ed.editingExisting")}</b>
+                      ) : typing.snap ? (
+                        "حجم النص هنا"
+                      ) : (
+                        "حجم الخط"
+                      )}
                       <input
                         type="number"
                         min={4}
@@ -1237,10 +1391,26 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                             sizePt: Math.max(4, Math.min(96, Number(e.target.value) || 14)),
                           })
                         }
-                        aria-label="حجم الخط بالنقاط"
+                        aria-label={t("ed.fontSizePt")}
                         className="w-11 rounded border border-border px-1 text-center text-[11px] font-extrabold text-foreground outline-none"
                       />
                       pt
+                      <span aria-hidden>·</span>
+                      <button
+                        onClick={() =>
+                          setTyping({ ...typing, bold: !(typing.bold ?? boldSnap) })
+                        }
+                        aria-label={t("ed.toggleBold")}
+                        title={t("ed.toggleBold")}
+                        className={cn(
+                          "grid size-5 place-items-center rounded text-[10px] font-extrabold",
+                          (typing.bold ?? boldSnap)
+                            ? "bg-primary text-white"
+                            : "border border-border text-muted-foreground"
+                        )}
+                      >
+                        B
+                      </button>
                       <span aria-hidden>·</span>
                       Tajawal
                     </span>
@@ -1256,11 +1426,9 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
 
       {/* ══ شريط التلميح السفلي ══ */}
       <div className="flex h-8 shrink-0 items-center justify-center gap-3 border-t border-border bg-white px-3 text-[10px] text-muted-foreground">
-        <span>
-          أداة «نص» تكتب نصًا حقيقيًا بحجم النص المجاور · «حجب» تغطي أي سطر بنقرة · البقية تُطبع كما تراها
-        </span>
+        <span>{t("ed.hint")}</span>
         <span className="hidden sm:inline">·</span>
-        <span className="hidden sm:inline">تراجع Ctrl+Z · إعادة Ctrl+Y · حذف المحدد Delete</span>
+        <span className="hidden sm:inline">{t("ed.hintShortcuts")}</span>
       </div>
     </div>
   );

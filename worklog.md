@@ -561,3 +561,41 @@ Stage Summary:
 - المرحلة 3 مكتملة: سلة دمج بصرية بين الملفات بترتيب حر قابل للتعديل، مُثبتة بايت-ببايت على سطح المكتب والجوال.
 - OCR متاح داخل المتصفح بالعربي والإنجليزي مع قيود صادقة موثقة (الإنجليزية موثوقة، العربية تقريبية بنموذج fast وقد تحتاج مراجعة).
 - الكتالوج صار 19 أداة؛ العدّاد ديناميكي تلقائيًا.
+
+---
+Task ID: 30
+Agent: Main Agent (Z.ai)
+Task: خطة التطوير الشاملة من المستخدم — 5 أولويات: عارض أوتوكاد، تحويل Word/Excel، تحسين تحرير النص، نظام لغات (عربي/English/हिन्दी)، إعلانات غير مزعجة
+
+Work Log:
+- **1) عارض الأوتوكاد (DWG/DXF) داخل المتصفح** — مكتبات MLightCAD المجانية: @mlightcad/cad-simple-viewer (MIT) + libredwg-converter (WASM في عامل ويب للـDWG) + dxf-json-converter (للـDXF) + cad-pdf-plugin (تصدير PDF متجهي). ملفات الـworkers الـ4 نُسخت إلى public/workers/ (libredwg-parser-worker + libredwg-web.wasm 10.8MB + mtext-renderer-worker + dxf-parser-worker).
+  * مكوّن cad-viewer.tsx: شاشة كاملة داكنة، تكبير/تصغير/ملاءمة (zoomTo بحساب screenToWorld مثل أمر ZOOM الداخلي — أوامر sendStringToExecute لا تقبل وسيطًا)، لوحة طبقات حية (layerStore + events.changed + إعادة قراءة متأخرة للملفات البطيئة)، تصدير PDF متجهي عبر AcApPdfConvertor، طباعة بلقطة الكانفس في نافذة طباعة.
+  * **ترقيع إجباري**: dxf-json-converter يستورد AcDbFontNameCollector غير الموجود في data-model المنشورة (خطأ تغليف) — scripts/patch_dxf_converter.mjs يستبدله بجامع خطوط محلي stub، مربوط في postinstall ليبقى بعد أي تثبيت.
+  * أُعيد استخدام المدير الأحادي عبر destroy() ثم createInstance بحاوية جديدة، و window.__cadMgr للفحص الآلي.
+  * E2E: DXF «SAMPLE PLAN» يُعرض متجهيًا، الطبقات (2) تعمل، التكبير ضاعف القوس بصريًا، الملاءمة رجعت للأطراف، التصدير نزّل PDF بصفحة model متجهية (7 كائنات + نص) — تحقق بـfitz. DWG التجريبي (بلا كائنات) قُرئ بلا أخطاء.
+- **2) التحويل إلى Word و Excel** — src/lib/to-office.ts جديد:
+  * مسار ذكي: PDF نصي → pdf.js عناصر بمواضعها → تجميع سطور؛ PDF ممسوح/صورة → tesseract.js بكلمات bbox → نفس السطور.
+  * Word عبر مكتبة docx: فقرات RTL للعربي (bidirectional + rightToLeft + Arial)، عناوين تلقائية (حجم ≥ 1.3× الوسيط)، فواصل صفحات، حجم من النقاط الأصلية.
+  * Excel عبر xlsx (SheetJS): تقسيم خلايا بالفجوات الأفقية (> 0.8×حجم الخط)، ورقة RTL للمحتوى العربي.
+  * أداتان في الكتالوج: «إلى Word» / «إلى Excel» تقبلان pdf+image، مع تنويه صادق دائم أن النتيجة تقريبية.
+  * اختبار وحدات (bun): docx سليم (bidi×4 + عربي + لاتيني)، xlsx خلايا Item|Qty|Price مقسومة بدقة.
+  * E2E: نصي → t_invoice.docx، ممسوح → t_scan2.docx عبر OCR (~25 ث)، Excel → t_invoice.xlsx.
+- **3) تحسين تحرير النص**:
+  * **تعديل النص الموجود بالنقر**: أداة «نص» على سطر موجود → حقل معبأ بالنص الأصلي + وضع edit — التأكيد بنص مغاير = قناع إخفاء بحدود السطر + كتابة البديل بنفس الحجم والموضع (وإنطلاق toast توضيحي). E2E: نقر على العنوان → PREFILL «INVOICE REPORT» → تعديل لـ«FINAL INVOICE 2026» → حفظ → fitz أثبت النص الجديد والرندر أظهر القديم مخفيًا.
+  * **كشف الخط العريض**: pageTextItems يقرأ fontName → commonObjs → نمط bold/black/heavy/bd → RealTextNorm.bold → drawRealEdits يضمّن Tajawal-Bold (/fonts موجودة) بدل Regular. المعاينة ترسم بنفس الوزن، وزر B للتبديل في حقل الكتابة وعلى المحدد.
+  * **تحكم أدق**: أزرار −/+ بحجم نقاط حقيقي للنص المحدد + عرض pt + زر B + أسهم الكيبورد تحرك المحدد (0.2% وShift=1%).
+- **4) نظام اللغات (عربي أساسي / English / हिन्दी)**:
+  * src/lib/i18n/: core.ts (LOCALES + detect من localStorage/المتصفح)، index.tsx (I18nProvider + useI18n + t بتعويض {n}/{name} + fallback للعربي)، قواميس ar/en/hi (~230 مفتاحًا لكل واحدة) بأسلوب دارج طبيعي.
+  * التغطية: الهيدر (مع مبدّل لغة dropdown بثلاث لغات وعلامة ✓)، الهيرو كاملًا، الفوتر، شريط الأدوات (tb.*)، أسماء ووصف الأدوات (tools.*)، الأفعال السياقية (verb.*)، مساحة العمل (ws.*)، أزرار الصفحات السريعة (qp.*)، المحرر (ed.*)، العارض (cad.*)، الكتالوج (cat.*)، الرسائل (msg.*).
+  * dir/lang على <html> يتحدث تلقائيًا، خط Noto Sans Devanagari للهندية (html[lang=hi] body font-family)، حفظ الاختيار في localStorage (mahatta-locale).
+  * E2E: المتصفح الإنجليزي فتح الموقع إنجليزيًا تلقائيًا، التبديل للهندية قلب الاتجاه LTR وترجم كل شيء (لقطة 53)، العودة للعربية أعادت RTL وحفظت الاختيار.
+  * إصلاحات أثناء الترجمة: 4 تظليلات لمتغير t (hintDisabled/execute/commitText/onUp + map في شريط الأدوات) أعيدت تسميتها def/st/tb/tl.
+- **5) الإعلانات غير المزعجة**: AdSlot component — بانر أعلى الصفحة فقط، يُفعّل حصرا بـ NEXT_PUBLIC_ADSENSE_CLIENT=ca-pub-…، بدون ضبط لا يرسم شيء (صفر قفزة تخطيط)، سكربت مرة واحدة، بلا نوافذ منبثقة أو تغطية محتوى.
+- **حوادث أثناء العمل**: سكربت باتش بايثون فرّغ workbench.tsx (فتح w ثم فشل write) — استُعيد من git وأُعيد تطبيق كل تعديلات الجلسة (CAD+Office+i18n) على دفعات MultiEdit مع إصلاح خطأ if/else ظهر أثناءها. خادم التطوير كان يُقتل بين النداءات — scripts/dev-watchdog.sh (حارس يعيد التشغيل) استقرّ الوضع.
+- tsc: صفر أخطاء src/ · eslint: نظيف تمامًا · انحدار شامل بعد إعادة البناء: الأدوات الثلاث الجديدة + المحرر + العارض + اللغات كلها تعمل، و390px سليم (لقطة 55).
+
+Stage Summary:
+- الموقع صار 3 اللغات مع 22 أداة + عارض أوتوكاد كامل داخل المتصفح (DWG/DXF: عرض، طبقات، تكبير، PDF متجهي، طباعة).
+- تحويل Word/Excel بحماس: نصي مباشر وممسوح عبر OCR مع صراحة تقريبية النتائج.
+- تحرير النص ترقى: تعديل موجود بالنقر، عريض مضمّن، تحكم بالنقاط والأسهم.
+- الملفات الجديدة: cad-viewer.tsx، to-office.ts، i18n/ (core+index+3 قواميس)، ad-slot.tsx، hindi-font.tsx، patch_dxf_converter.mjs، public/workers/×4.

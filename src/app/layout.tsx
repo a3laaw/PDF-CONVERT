@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Tajawal } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import { I18nProvider } from "@/lib/i18n";
+import { HindiFont, hindiFont } from "@/components/pdf-station/hindi-font";
 
 const tajawal = Tajawal({
   variable: "--font-tajawal",
@@ -46,9 +48,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ar" dir="rtl" suppressHydrationWarning>
-      <body className={`${tajawal.variable} antialiased bg-background text-foreground`}>
-        {children}
-        <Toaster position="bottom-right" dir="rtl" richColors closeButton />
+      <body
+        className={`${tajawal.variable} ${hindiFont.variable} antialiased bg-background text-foreground`}
+      >
+        <I18nProvider>
+          <HindiFont />
+          {children}
+          <Toaster position="bottom-right" dir="rtl" richColors closeButton />
+        </I18nProvider>
       </body>
     </html>
   );

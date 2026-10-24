@@ -5,6 +5,7 @@ import { PDFDocument, degrees, rgb, StandardFonts } from "pdf-lib";
 import { toHindiDigits } from "./arabic";
 import { parsePageRanges } from "./interpreter";
 import { resultName, stripExt } from "./naming";
+import { collectOfficeDoc, buildDocx, buildXlsx } from "./to-office";
 import type { ResultFile } from "./types";
 
 /* ─────────── أدوات داخلية ─────────── */
@@ -396,6 +397,10 @@ export async function runOp(
       return opImageResize(inputs, params, label, ctx);
     case "image_crop":
       return opImageCrop(inputs, params, label, ctx);
+    case "pdf_to_word":
+      return opToOffice(inputs, "word", label, ctx);
+    case "pdf_to_excel":
+      return opToOffice(inputs, "excel", label, ctx);
     default:
       throw new Error("عملية غير معروفة");
   }
@@ -1061,6 +1066,43 @@ async function opOcr(
   }
 }
 
+/* التحويل إلى Word / Excel — نفس المسار الذكي: نص حقيقي مباشرة، ممسوح عبر OCR */
+async function opToOffice(
+  inputs: EngineInput[],
+  target: "word" | "excel",
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile[]> {
+  const results: ResultFile[] = [];
+  for (const input of inputs) {
+    ctx.onProgress?.(`جارٍ تحويل «${input.name}» إلى ${target === "word" ? "Word" : "Excel"}…`);
+    const doc = await collectOfficeDoc(input, "ara+eng", (m) => ctx.onProgress?.(m));
+    if (!doc.pages.some((p) => p.lines.length)) {
+      throw new Error(
+        target === "word"
+          ? "ما قدرناش نقرأ نصًا من الملف — لو صورة غير واضحة جرّب أداة OCR أولًا"
+          : "ما قدرناش نقرأ نصًا من الملف — الجداول في صور غير واضحة تحتاج أداة OCR بجودة أعلى"
+      );
+    }
+    ctx.onProgress?.(
+      doc.source === "text"
+        ? `نُستخرج النص مباشرة (${toHindiDigits(doc.pages.length)} صفحات) — جارٍ بناء الملف…`
+        : "القراءة تمت بالـOCR — جارٍ بناء الملف…"
+    );
+    const blob =
+      target === "word" ? await buildDocx(doc, input.name) : await buildXlsx(doc, input.name);
+    results.push(
+      resultFile(
+        resultName(target === "word" ? "pdf_to_word" : "pdf_to_excel", input.name),
+        blob,
+        label,
+        "other"
+      )
+    );
+  }
+  return results;
+}
+
 /* بيانات الملف */
 async function opMetadata(
   inputs: EngineInput[],
@@ -1311,6 +1353,7 @@ export interface PdfTextItem {
   y: number;
   w: number;
   sizePt: number;
+  bold?: boolean;
 }
 
 /** عناصر نص الصفحة + أبعادها بوحدات PDF */
@@ -1320,7 +1363,7 @@ export interface PageInfo {
   h: number;
 }
 
-/** قراءة عناصر النص بإحداثياتها وأحجامها الحقيقية — أساس مطابقة الحجم */
+/** قراءة عناصر النص بإحداثياتها وأحجامها الحقيقية — أساس مطابقة الحجم + كشف الخط العريض */
 export async function pageTextItems(file: File, pageNo: number): Promise<PageInfo> {
   const pdfjs = await getPdfjs();
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -1328,16 +1371,41 @@ export async function pageTextItems(file: File, pageNo: number): Promise<PageInf
   const page = await doc.getPage(Math.max(1, pageNo));
   const v1 = page.getViewport({ scale: 1 });
   const tc = await page.getTextContent();
+  /* اسم الخط الحقيقي لكل عنصر → نكشف العريض منه (Arial-BoldMT / Helvetica-Bold …) */
+  const boldById = new Map<string, boolean>();
+  const boldOf = (fid: string | undefined): boolean => {
+    if (!fid) return false;
+    if (boldById.has(fid)) return boldById.get(fid)!;
+    let bold = false;
+    try {
+      const fo = (
+        page as unknown as {
+          commonObjs?: { get?: (id: string) => unknown };
+        }
+      ).commonObjs?.get?.(fid);
+      const nm = String(
+        (fo as { name?: string; fallbackName?: string })?.name ??
+          (fo as { fallbackName?: string })?.fallbackName ??
+          fid
+      );
+      bold = /bold|black|heavy|semib|[-_.]bd\b/i.test(nm) && !/nobot/i.test(nm);
+    } catch {
+      bold = /bold|black|heavy|[-_.]bd\b/i.test(fid);
+    }
+    boldById.set(fid, bold);
+    return bold;
+  };
   const items: PdfTextItem[] = [];
   for (const it of tc.items as unknown as {
     str: string;
     transform: number[];
     width: number;
+    fontName?: string;
   }[]) {
     if (!it.str || !it.str.trim()) continue;
     const t = it.transform;
     const sizePt = Math.hypot(t[2], t[3]) || Math.hypot(t[0], t[1]) || 12;
-    items.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, sizePt });
+    items.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, sizePt, bold: boldOf(it.fontName) });
   }
   (doc as unknown as { destroy?: () => void }).destroy?.();
   return { items, w: v1.width, h: v1.height };
@@ -1361,6 +1429,7 @@ export interface RealTextNorm {
   sizePt: number;
   text: string;
   color: string; // hex
+  bold?: boolean;
 }
 
 let tajawalCache: Uint8Array | null = null;
@@ -1371,6 +1440,16 @@ async function getTajawal(): Promise<Uint8Array> {
     tajawalCache = new Uint8Array(await res.arrayBuffer());
   }
   return tajawalCache.slice();
+}
+
+let tajawalBoldCache: Uint8Array | null = null;
+async function getTajawalBold(): Promise<Uint8Array> {
+  if (!tajawalBoldCache) {
+    const res = await fetch("/fonts/Tajawal-Bold.ttf");
+    if (!res.ok) throw new Error("تعذّر تحميل خط الكتابة العريض");
+    tajawalBoldCache = new Uint8Array(await res.arrayBuffer());
+  }
+  return tajawalBoldCache.slice();
 }
 
 function hexToRgb01(hex: string): [number, number, number] {
@@ -1465,7 +1544,8 @@ export async function drawRealEdits(
     fontkitMod) as unknown as Parameters<PDFDocument["registerFontkit"]>[0];
   const out = await loadPdfLib(pdfBytes.slice());
   out.registerFontkit(fontkit);
-  const font = await out.embedFont(await getTajawal(), { subset: true });
+  const fontReg = await out.embedFont(await getTajawal(), { subset: true });
+  const fontBold = await out.embedFont(await getTajawalBold(), { subset: true });
 
   /* تجميع حسب الصفحة مع حفظ ترتيب: أقنعة ثم نصوص */
   const pages = new Map<number, { masks: RealMaskNorm[]; texts: RealTextNorm[] }>();
@@ -1502,7 +1582,7 @@ export async function drawRealEdits(
       const [r, g, b] = hexToRgb01(t.color);
       drawBidiRight(
         pg,
-        font,
+        t.bold ? fontBold : fontReg,
         t.text,
         t.sizePt,
         t.x * W, // مثبّت من اليمين مثل المعاينة تمامًا

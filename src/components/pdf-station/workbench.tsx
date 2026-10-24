@@ -9,9 +9,11 @@ import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
 import { downloadBlob, openBlobInNewTab, pageQuickAction, pdfPageThumbs } from "@/lib/pdf-engine";
 import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
+import { CadViewer } from "@/components/pdf-station/cad-viewer";
 import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { MergePagesPanel } from "@/components/pdf-station/merge-pages-panel";
 import { toHindiDigits } from "@/lib/arabic";
+import { useI18n, toolKey } from "@/lib/i18n";
 import { toast } from "sonner";
 import type { FileKind, OpId, ResultFile } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -36,6 +38,12 @@ const svg = (paths: React.ReactNode) => (
 const TOOL_ICONS: Record<string, React.ReactNode> = {
   editor: svg(
     <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+  ),
+  cad_viewer: svg(
+    <>
+      <path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3z" />
+      <path d="m14 17 3 3 4-4" />
+    </>
   ),
   compress: svg(<path d="M4 9h16M4 15h10M9 4l-4 5 4 5" />),
   merge: svg(
@@ -122,10 +130,25 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
       <path d="m13.8 13.8 2.7 2.7" />
     </>
   ),
+  pdf_to_word: svg(
+    <>
+      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
+      <path d="M14 3v6h6" />
+      <path d="M8 13.5 9.5 17l1.5-3.5M12.5 17v-3.5l2 3.5 2-3.5V17" />
+    </>
+  ),
+  pdf_to_excel: svg(
+    <>
+      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
+      <path d="M14 3v6h6" />
+      <path d="m8.5 13.5 7 5M15.5 13.5l-7 5" />
+    </>
+  ),
 };
 
-const TOOLBAR: { id: OpId | "editor"; label: string }[] = [
+const TOOLBAR: { id: OpId | "editor" | "cad_viewer"; label: string }[] = [
   { id: "editor", label: "تعديل" },
+  { id: "cad_viewer", label: "عارض أوتوكاد" },
   { id: "compress", label: "تصغير" },
   { id: "merge", label: "دمج" },
   { id: "merge_pages", label: "دمج صفحات" },
@@ -144,6 +167,8 @@ const TOOLBAR: { id: OpId | "editor"; label: string }[] = [
   { id: "image_crop", label: "قص" },
   { id: "extract_text", label: "نص" },
   { id: "ocr", label: "OCR" },
+  { id: "pdf_to_word", label: "لـ Word" },
+  { id: "pdf_to_excel", label: "لـ Excel" },
 ];
 
 /* المرحلة 2 — الأدوات السياقية: لكل قسم زرّه الخاص بفعله العربي، لا يظهر إلا داخل قسمه */
@@ -165,6 +190,8 @@ const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
   image_crop: { verb: "اقتصّ الصورة" },
   extract_text: { verb: "استخرج النص" },
   ocr: { verb: "اقرأ النص الممسوح" },
+  pdf_to_word: { verb: "حوّل لـ Word" },
+  pdf_to_excel: { verb: "حوّل لـ Excel" },
 };
 
 /* الأدوات التي تعمل على صفحات محددة — زرّها يعرض عدد الصفحات المختارة */
@@ -172,6 +199,15 @@ const PAGES_TOOLS: OpId[] = ["extract", "delete", "rotate"];
 
 function pagesLabel(n: number): string {
   return n === 1 ? "صفحة واحدة" : n === 2 ? "صفحتين" : `${toHindiDigits(n)} صفحات`;
+}
+
+/* نفس الدالة عبر القاموس — تُستخدم داخل المكوّن */
+function pagesWordT(n: number, t: (k: string) => string): string {
+  return n === 1
+    ? t("ws.pagesWordOne")
+    : n === 2
+      ? t("ws.pagesWordTwo")
+      : `${toHindiDigits(n)} ${t("ws.pagesWordMany")}`;
 }
 
 /* ─────────── أدوات مساعدة ─────────── */
@@ -237,6 +273,7 @@ function extLabel(name: string): string {
 /* ─────────── المكوّن ─────────── */
 
 export function Workbench() {
+  const { t } = useI18n();
   const files = useWorkspace((s) => s.files);
   const results = useWorkspace((s) => s.results);
   const runState = useWorkspace((s) => s.runState);
@@ -263,6 +300,7 @@ export function Workbench() {
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [cadOpen, setCadOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const thumbsReq = useRef<Set<string>>(new Set());
   const bottomBarRef = useRef<HTMLDivElement>(null);
@@ -297,7 +335,7 @@ export function Workbench() {
         objUrl = URL.createObjectURL(activeFile.file);
         done(objUrl);
       });
-    } else {
+    } else if (activeFile.kind === "pdf") {
       renderPageDataUrl(activeFile.file, page)
         .then(done)
         .catch(() => undefined);
@@ -311,6 +349,7 @@ export function Workbench() {
 
   const editorEnabled =
     activeFile?.kind === "pdf" || activeFile?.kind === "image";
+  const cadEnabled = activeFile?.kind === "cad";
 
   /* وضع الفصل البصري بعمودين + وضع دمج الصفحات من عدة ملفات (المرحلة 3) */
   const splitMode = tool === "split" && activeFile?.kind === "pdf";
@@ -380,37 +419,41 @@ export function Workbench() {
   };
 
   const hintDisabled = (id: OpId) => {
-    const t = TOOLS_BY_ID[id];
-    if (!t) return;
+    const def = TOOLS_BY_ID[id];
+    if (!def) return;
     if (id === "merge_pages") {
-      toast.info("أضف ملف PDF أولًا — الأداة تجمع صفحات من عدة ملفات في ملف واحد");
+      toast.info(t("msg.addPdfFirst"));
       return;
     }
-    if (t.accepts.includes("image") && !t.accepts.includes("pdf"))
-      toast.info("الأداة دي للصور — حدّد صورة من قائمة الملفات");
+    if (def.accepts.includes("image") && !def.accepts.includes("pdf"))
+      toast.info(t("msg.forImages"));
+    else if (activeFile?.kind === "cad")
+      toast.info(t("cad.openFromBar"));
     else if (activeFile?.kind === "image")
-      toast.info("الأداة دي لملفات PDF — للصور استخدم «من صور»");
+      toast.info(t("msg.forPdfUseImages"));
     else if (activeFile && activeFile.kind !== "pdf")
-      toast.info("ندعم ملفات PDF والصور فقط حاليًا — أنواع أخرى غير مدعومة بعد");
-    else toast.info("حدّد ملف PDF من قائمة الملفات أولًا");
+      toast.info(t("msg.kinds"));
+    else toast.info(t("msg.selectPdf"));
   };
 
   const editorSave = (name: string, blob: Blob) => {
     addEditorResult(name, blob);
     setEditing(false);
-    toast.success("حُفظت التعديلات — الملف جاهز للتنزيل");
+    toast.success(t("ed.savedToast"));
   };
 
-  /* اسم زرّ الأداة السياقي: الفعل العربي + عدد الصفحات المختارة إن وُجد */
+  /* اسم زرّ الأداة السياقي: الفعل + عدد الصفحات المختارة إن وُجد */
   const actionLabel = (id: OpId): string => {
-    let verb = TOOL_ACTION[id]?.verb ?? "نفّذ";
+    /* من القاموس أولاً — وإن غاب المفتاح رجع للعربي في TOOL_ACTION */
+    let verb = t(`verb.${id}`);
+    if (verb === `verb.${id}`) verb = TOOL_ACTION[id]?.verb ?? t("verb.run");
     /* التدوير والتصغير مشتركان بين PDF والصور — الفعل يتبع نوع الملف النشط المعروض */
     if (activeFile?.kind === "image") {
-      if (id === "rotate") verb = "دوّر/اقلب الصورة";
-      if (id === "compress") verb = "صغّر حجم الصورة";
+      if (id === "rotate") verb = t("verb.rotateImg");
+      if (id === "compress") verb = t("verb.compressImg");
     }
     if (PAGES_TOOLS.includes(id) && selPages.length > 0)
-      return `${verb} (${pagesLabel(selPages.length)})`;
+      return `${verb} (${pagesWordT(selPages.length, t)})`;
     return verb;
   };
 
@@ -451,10 +494,10 @@ export function Workbench() {
 
   const execute = async () => {
     if (!tool || running) return;
-    const t = TOOLS_BY_ID[tool];
-    const chosen = files.filter((f) => effectiveSel.has(f.id) && t.accepts.includes(f.kind));
+    const def = TOOLS_BY_ID[tool];
+    const chosen = files.filter((f) => effectiveSel.has(f.id) && def.accepts.includes(f.kind));
     if (chosen.length === 0) {
-      toast.error(t.accepts.includes("image") ? "حدد صورًا من قائمة الملفات أولًا" : "حدد ملف PDF من قائمة الملفات أولًا");
+      toast.error(def.accepts.includes("image") ? t("msg.forImages") : t("msg.selectPdf"));
       return;
     }
     await runOnFiles(tool, params, chosen.map((f) => f.id));
@@ -525,8 +568,8 @@ export function Workbench() {
           <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/25">
             <Plus className="size-7" aria-hidden />
           </div>
-          <h2 className="mt-4 text-xl font-extrabold">اسحب ملفاتك هنا</h2>
-          <p className="mt-1 text-sm text-muted-foreground">PDF أو صور</p>
+          <h2 className="mt-4 text-xl font-extrabold">{t("hero.drop")}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t("hero.dropHint")}</p>
           <Button
             className="mt-5 px-8 font-extrabold"
             onClick={(e) => {
@@ -534,17 +577,18 @@ export function Workbench() {
               inputRef.current?.click();
             }}
           >
-            اختيار ملفات
+            {t("hero.pick")}
           </Button>
         </div>
       ) : (
         <>
           {/* ─── شريط الأدوات ─── */}
           <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
-            {TOOLBAR.map(({ id, label }) => {
+            {TOOLBAR.map(({ id }) => {
               const isEditor = id === "editor";
-              const ok = isEditor ? editorEnabled : toolEnabled(id);
-              const active = isEditor ? editing : tool === id;
+              const isCad = id === "cad_viewer";
+              const ok = isEditor ? editorEnabled : isCad ? cadEnabled : toolEnabled(id as OpId);
+              const active = isEditor ? editing : isCad ? cadOpen : tool === id;
               return (
                 <button
                   key={id}
@@ -553,15 +597,23 @@ export function Workbench() {
                       if (ok) {
                         setTool(null);
                         setEditing(true);
-                      } else toast.info("حدّد ملف PDF أو صورة من قائمة الملفات أولًا");
+                      } else toast.info(t("msg.selectPdfOrImage"));
+                      return;
+                    }
+                    if (isCad) {
+                      if (ok) {
+                        setTool(null);
+                        setEditing(false);
+                        setCadOpen(true);
+                      } else toast.info(t("cad.addFirst"));
                       return;
                     }
                     if (ok) {
                       setEditing(false);
                       /* النقر على «فصل» أو «دمج صفحات» وهي مفتوحة يغلقها */
                       if ((id === "split" || id === "merge_pages") && tool === id) setTool(null);
-                      else pickTool(id);
-                    } else hintDisabled(id);
+                      else pickTool(id as OpId);
+                    } else hintDisabled(id as OpId);
                   }}
                   className={cn(
                     "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
@@ -573,7 +625,7 @@ export function Workbench() {
                   )}
                 >
                   {TOOL_ICONS[id]}
-                  {label}
+                  {t(`tb.${id}`)}
                 </button>
               );
             })}
@@ -582,7 +634,7 @@ export function Workbench() {
           {/* ─── الجسم: ملفات + (فصل بعمودين | صفحات + معاينة) ─── */}
           <div className="mt-4 grid gap-4 lg:grid-cols-[200px_130px_1fr]">
             <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-3">
-              <p className="px-1 text-[11px] font-bold text-muted-foreground">الملفات</p>
+              <p className="px-1 text-[11px] font-bold text-muted-foreground">{t("ws.files")}</p>
               <div className="flex max-h-[460px] flex-col gap-2 overflow-y-auto">
                 {files.map((f) => (
                   <div
@@ -608,7 +660,7 @@ export function Workbench() {
                         e.stopPropagation();
                         toggleSel(f.id);
                       }}
-                      aria-label="تحديد الملف"
+                      aria-label={t("ws.selectFile")}
                       className={cn(
                         "absolute -left-1.5 -top-1.5 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
                         effectiveSel.has(f.id)
@@ -633,7 +685,7 @@ export function Workbench() {
                     <span className="min-w-0">
                       <span className="block max-w-[108px] truncate text-xs font-bold">{f.name}</span>
                       <span className="block text-[10px] text-muted-foreground">
-                        {f.pages ? `${toHindiDigits(f.pages)} صفحات · ` : ""}
+                        {f.pages ? `${toHindiDigits(f.pages)} ${t("ws.pagesCount")} · ` : ""}
                         {fmtSize(f.size)}
                       </span>
                     </span>
@@ -642,7 +694,7 @@ export function Workbench() {
                         e.stopPropagation();
                         removeFile(f.id);
                       }}
-                      aria-label="إزالة الملف"
+                      aria-label={t("ws.removeFile")}
                       className="mr-auto text-muted-foreground/40 hover:text-red-500"
                     >
                       <X className="size-3.5" aria-hidden />
@@ -653,7 +705,7 @@ export function Workbench() {
                   onClick={() => inputRef.current?.click()}
                   className="rounded-xl border border-dashed border-border py-2.5 text-xs font-bold text-muted-foreground hover:border-primary/40 hover:text-primary"
                 >
-                  + إضافة ملف
+                  {t("hero.addFile")}
                 </button>
               </div>
             </div>
@@ -694,7 +746,7 @@ export function Workbench() {
                         e.stopPropagation();
                         togglePage(i + 1);
                       }}
-                      aria-label="تحديد الصفحة"
+                      aria-label={t("ws.selectPage")}
                       className={cn(
                         "absolute -left-1.5 -top-1.5 z-10 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
                         selPages.includes(i + 1)
@@ -712,26 +764,26 @@ export function Workbench() {
                       )}
                     >
                       <QuickPageBtn
-                        label={`حذف الصفحة ${toHindiDigits(i + 1)}`}
+                        label={`${t("qp.delete")} ${toHindiDigits(i + 1)}`}
                         danger
                         onClick={() => quickAction("delete", i + 1)}
                       >
                         <Trash2 className="size-3.5" aria-hidden />
                       </QuickPageBtn>
                       <QuickPageBtn
-                        label={`تدوير الصفحة ${toHindiDigits(i + 1)} 90°`}
+                        label={`${t("qp.rotate")} ${toHindiDigits(i + 1)} 90°`}
                         onClick={() => quickAction("rotate", i + 1)}
                       >
                         <RotateCw className="size-3.5" aria-hidden />
                       </QuickPageBtn>
                       <QuickPageBtn
-                        label={`استخراج الصفحة ${toHindiDigits(i + 1)}`}
+                        label={`${t("qp.extract")} ${toHindiDigits(i + 1)}`}
                         onClick={() => quickAction("extract", i + 1)}
                       >
                         <FileOutput className="size-3.5" aria-hidden />
                       </QuickPageBtn>
                       <QuickPageBtn
-                        label={`تكرار الصفحة ${toHindiDigits(i + 1)}`}
+                        label={`${t("qp.duplicate")} ${toHindiDigits(i + 1)}`}
                         onClick={() => quickAction("duplicate", i + 1)}
                       >
                         <Copy className="size-3.5" aria-hidden />
@@ -740,7 +792,7 @@ export function Workbench() {
                   </div>
                 ))}
               {activeFile?.kind === "pdf" && !thumbs[activeFile.id] && (
-                <p className="py-4 text-center text-[11px] text-muted-foreground">جارٍ التحضير…</p>
+                <p className="py-4 text-center text-[11px] text-muted-foreground">{t("ws.preparing")}</p>
               )}
               {activeFile?.kind === "image" && activeFile.thumb && (
                 <img src={activeFile.thumb} alt="" className="rounded-lg border border-border" />
@@ -748,7 +800,33 @@ export function Workbench() {
             </div>
 
             <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-border bg-slate-50 p-4">
-              {editing && activeFile ? (
+              {activeFile?.kind === "cad" && !cadOpen ? (
+                <div className="flex max-w-md flex-col items-center gap-4 text-center">
+                  <span className="grid size-16 place-items-center rounded-2xl bg-amber-50 text-3xl">📐</span>
+                  <div>
+                    <h3 className="text-lg font-extrabold">{t("cad.ctaTitle")}</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {t("cad.ctaBody")}
+                    </p>
+                  </div>
+                  <Button
+                    onClick={() => {
+                      setTool(null);
+                      setEditing(false);
+                      setCadOpen(true);
+                    }}
+                    className="bg-amber-600 px-8 font-extrabold text-white hover:bg-amber-700"
+                  >
+                    {t("cad.ctaOpen")}
+                  </Button>
+                </div>
+              ) : cadOpen && activeFile ? (
+                <CadViewer
+                  fileName={activeFile.name}
+                  file={activeFile.file}
+                  onClose={() => setCadOpen(false)}
+                />
+              ) : editing && activeFile ? (
                 <EditorCanvas
                   fileName={activeFile.name}
                   kind={activeFile.kind === "image" ? "image" : "pdf"}
@@ -774,7 +852,7 @@ export function Workbench() {
                     <div className="mt-4 flex items-center gap-3">
                       <button
                         onClick={() => setPage((p) => Math.max(1, p - 1))}
-                        aria-label="الصفحة السابقة"
+                        aria-label={t("qp.prevPage")}
                         className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
                       >
                         ›
@@ -784,7 +862,7 @@ export function Workbench() {
                       </span>
                       <button
                         onClick={() => setPage((p) => Math.min(activeFile.pages ?? 1, p + 1))}
-                        aria-label="الصفحة التالية"
+                        aria-label={t("qp.nextPage")}
                         className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
                       >
                         ‹
@@ -801,7 +879,7 @@ export function Workbench() {
             {activeFile?.kind === "pdf" && !editing && !splitMode && !mergePagesMode && (
               <div className="lg:hidden">
                 <p className="px-1 pb-1.5 text-[11px] font-bold text-muted-foreground">
-                  الصفحات — مرّر أفقيًا واضغط على أي إجراء
+                  {t("ws.pagesHint")}
                 </p>
                 <div className="flex gap-2 overflow-x-auto pb-2">
                   {(thumbs[activeFile.id] ?? []).map((src, i) => (
@@ -819,7 +897,7 @@ export function Workbench() {
                           e.stopPropagation();
                           togglePage(i + 1);
                         }}
-                        aria-label="تحديد الصفحة"
+                        aria-label={t("ws.selectPage")}
                         className={cn(
                           "absolute -left-1.5 -top-1.5 z-10 grid size-5 place-items-center rounded-full border text-[10px] font-extrabold",
                           selPages.includes(i + 1)
@@ -831,26 +909,26 @@ export function Workbench() {
                       </button>
                       <div className="mt-1 flex items-center justify-center gap-0.5">
                         <QuickPageBtn
-                          label={`حذف الصفحة ${toHindiDigits(i + 1)}`}
+                          label={`${t("qp.delete")} ${toHindiDigits(i + 1)}`}
                           danger
                           onClick={() => quickAction("delete", i + 1)}
                         >
                           <Trash2 className="size-3" aria-hidden />
                         </QuickPageBtn>
                         <QuickPageBtn
-                          label={`تدوير الصفحة ${toHindiDigits(i + 1)} 90°`}
+                          label={`${t("qp.rotate")} ${toHindiDigits(i + 1)} 90°`}
                           onClick={() => quickAction("rotate", i + 1)}
                         >
                           <RotateCw className="size-3" aria-hidden />
                         </QuickPageBtn>
                         <QuickPageBtn
-                          label={`استخراج الصفحة ${toHindiDigits(i + 1)}`}
+                          label={`${t("qp.extract")} ${toHindiDigits(i + 1)}`}
                           onClick={() => quickAction("extract", i + 1)}
                         >
                           <FileOutput className="size-3" aria-hidden />
                         </QuickPageBtn>
                         <QuickPageBtn
-                          label={`تكرار الصفحة ${toHindiDigits(i + 1)}`}
+                          label={`${t("qp.duplicate")} ${toHindiDigits(i + 1)}`}
                           onClick={() => quickAction("duplicate", i + 1)}
                         >
                           <Copy className="size-3" aria-hidden />
@@ -859,7 +937,7 @@ export function Workbench() {
                     </div>
                   ))}
                   {!thumbs[activeFile.id] && (
-                    <p className="py-4 text-[11px] text-muted-foreground">جارٍ التحضير…</p>
+                    <p className="py-4 text-[11px] text-muted-foreground">{t("ws.preparing")}</p>
                   )}
                 </div>
               </div>
@@ -875,27 +953,32 @@ export function Workbench() {
               >
             {tool === "remove_watermark" && (
               <span className="w-full text-[10px] text-muted-foreground">
-                هذه الأداة تعالج الملف على الخادم ويُحذف فور انتهاء التنفيذ — والعلامات المرسومة داخل صور قد لا تُحذف
+                {t("ws.hintRemoveWm")}
               </span>
             )}
             {tool === "extract_text" && activeFile?.scanned && (
               <span className="w-full text-[10px] font-bold text-amber-600">
-                هذا الملف ممسوح ضوئيًا بلا طبقة نص — النتيجة ستكون فارغة تقريبًا؛ استخدم أداة «OCR» من الشريط لتقرأ النص
+                {t("ws.hintScanned")}
               </span>
             )}
             {tool === "ocr" && (
               <span className="w-full text-[10px] text-muted-foreground">
-                القراءة تجري داخل متصفحك وتقريبية — راجع النص قبل الاعتماد، وإن ضعفت النتيجة جرّب تغيير اللغة فوق
+                {t("ws.hintOcr")}
+              </span>
+            )}
+            {(tool === "pdf_to_word" || tool === "pdf_to_excel") && (
+              <span className="w-full text-[10px] text-muted-foreground">
+                {t("ws.hintOffice")}
               </span>
             )}
             {tool ? (
               <>
                 <span
-                  aria-label="القسم الحالي"
+                  aria-label={t("ws.currentSection")}
                   className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-extrabold text-primary"
                 >
                   <span aria-hidden>{TOOLS_BY_ID[tool].emoji}</span>
-                  {TOOLS_BY_ID[tool].name}
+                  {t(toolKey(tool, "name"))}
                 </span>
                 {TOOLS_BY_ID[tool].fields.map((f) => (
                   <span key={f.key} className="flex items-center gap-1.5">
@@ -926,16 +1009,16 @@ export function Workbench() {
             ) : (
               <span className="px-1 text-xs font-bold text-muted-foreground">
                 {activeFile?.kind === "image"
-                  ? "صورتك جاهزة: تصغير الحجم، تدوير وقلب، قص، صيغة، أبعاد، من صور — اختر من الشريط وسيظهر زرّها"
-                  : activeFile && activeFile.kind !== "pdf"
-                    ? "هذا النوع غير مدعوم حاليًا — PDF والصور فقط"
-                    : "اختر أداة من الشريط وسيظهر زرّها هنا"}
+                  ? t("ws.noToolImage")
+                  : activeFile && activeFile.kind !== "pdf" && activeFile.kind !== "cad"
+                    ? t("ws.noToolOther")
+                    : t("ws.noTool")}
               </span>
             )}
             <span className="flex-1" />
             {expectedName && (
               <span className="text-[11px] text-muted-foreground">
-                تُحفظ باسم <b className="text-xs text-foreground">{expectedName}</b>
+                {t("ws.savedAs")} <b className="text-xs text-foreground">{expectedName}</b>
               </span>
             )}
             {tool && (
@@ -946,7 +1029,7 @@ export function Workbench() {
                 aria-label={actionLabel(tool)}
                 className="px-6 font-extrabold"
               >
-                {running ? "جارٍ التنفيذ…" : actionLabel(tool)}
+                {running ? t("verb.running") : actionLabel(tool)}
               </Button>
             )}
           </div>
@@ -974,12 +1057,12 @@ export function Workbench() {
               ✓
             </span>
             <h3 className="font-extrabold text-emerald-600">
-              جاهز — {toHindiDigits(results.length)} {results.length === 1 ? "ملف" : "ملفات"}
+              {t("ws.ready")} — {toHindiDigits(results.length)} {results.length === 1 ? t("ws.readyOne") : t("ws.readyMany")}
             </h3>
             <span className="flex-1" />
             {results.length > 1 && (
               <Button variant="outline" size="sm" onClick={downloadAll} className="font-bold">
-                تحميل الكل (ZIP)
+                {t("ws.downloadAll")}
               </Button>
             )}
             <Button
@@ -988,7 +1071,7 @@ export function Workbench() {
               onClick={clearResults}
               className="text-muted-foreground"
             >
-              رجوع للشغل
+              {t("ws.backToWork")}
             </Button>
           </div>
           <div className="mt-3 flex flex-col gap-2">
@@ -1008,14 +1091,14 @@ export function Workbench() {
                     />
                     <button
                       onClick={commitRename}
-                      aria-label="حفظ الاسم"
+                      aria-label={t("ws.saveName")}
                       className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-500 text-white"
                     >
                       <Check className="size-3.5" aria-hidden />
                     </button>
                     <button
                       onClick={() => setRenaming(null)}
-                      aria-label="إلغاء"
+                      aria-label={t("ws.cancel")}
                       className="shrink-0 text-muted-foreground"
                     >
                       <X className="size-3.5" aria-hidden />
@@ -1031,7 +1114,7 @@ export function Workbench() {
                   <>
                     <button
                       onClick={() => setRenaming({ id: r.id, value: r.name })}
-                      aria-label="إعادة تسمية"
+                      aria-label={t("ws.rename")}
                       className="grid size-8 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground hover:text-primary"
                     >
                       <Pencil className="size-3.5" aria-hidden />
@@ -1041,7 +1124,7 @@ export function Workbench() {
                       onClick={() => download(r)}
                       className="shrink-0 bg-emerald-600 font-extrabold text-white hover:bg-emerald-700"
                     >
-                      تحميل
+                      {t("ws.download")}
                     </Button>
                   </>
                 )}

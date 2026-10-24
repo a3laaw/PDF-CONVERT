@@ -22,8 +22,9 @@ export const OP_SUFFIX: Partial<Record<OpId, string>> = {
   image_crop: "بعد-القص",
   merge_pages: "صفحات-مختارة",
   ocr: "نص-ممسوح",
+  pdf_to_word: "وورد",
+  pdf_to_excel: "اكسل",
 };
-
 /** إزالة الامتداد */
 export function stripExt(name: string): string {
   return name.replace(/\.[^.]+$/, "");
@@ -51,6 +52,10 @@ export function resultName(op: OpId, fileName: string, index = 0, ext?: string):
       return `${base}-نص-ممسوح.txt`;
     case "image_convert":
       return `${base}${ext ?? ".jpg"}`;
+    case "pdf_to_word":
+      return `${base}.docx`;
+    case "pdf_to_excel":
+      return `${base}.xlsx`;
     default: {
       const suffix = OP_SUFFIX[op] ?? "جديد";
       return `${base}-${suffix}${ext ?? (extOf(fileName) || ".pdf")}`;

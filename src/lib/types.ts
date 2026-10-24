@@ -22,7 +22,9 @@ export type OpId =
   | "image_resize"
   | "image_crop"
   | "merge_pages"
-  | "ocr";
+  | "ocr"
+  | "pdf_to_word"
+  | "pdf_to_excel";
 
 /** ملف داخل مساحة العمل */
 export interface WorkspaceFile {

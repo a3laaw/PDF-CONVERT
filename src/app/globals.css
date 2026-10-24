@@ -166,3 +166,8 @@ body {
 .styled-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
 }
+
+/* اللغة الهندية: ديفاناغاري أولًا ثم باقي الخطوط */
+html[lang="hi"] body {
+  font-family: var(--font-hindi), var(--font-tajawal), system-ui, sans-serif;
+}
