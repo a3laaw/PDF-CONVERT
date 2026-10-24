@@ -52,3 +52,20 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# runtime artifacts & local data (kept on disk, not in git)
+.env
+/db/
+/upload/
+/download/
+/tool-results/
+/test-assets/
+/.zscripts/
+/mini-services/
+# LibreDWG build artifacts (434MB) — rebuild via scripts/build_libredwg.sh
+/scripts/build/
+# E2E screenshots & test outputs
+/scripts/t_out/
+# local databases
+*.db
+*.db-journal
