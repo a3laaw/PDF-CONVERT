@@ -261,6 +261,18 @@ export const en: Record<string, string> = {
   "cad.addFirst": "Add a DWG or DXF file first — the viewer opens AutoCAD files right in your browser",
   "cad.openFromBar": "AutoCAD files open with “CAD viewer” in the bar — top of the bar",
 
+  /* Measure tool */
+  "cad.measure": "Measure",
+  "cad.measureHint": "Click two or more points on the drawing — distance shows instantly · wheel still zooms while measuring",
+  "cad.mNone": "Click two points on the drawing to measure",
+  "cad.mTotal": "Total",
+  "cad.mAngle": "Angle",
+  "cad.mUnit": "units",
+  "cad.mScale": "Drawing unit",
+  "cad.mScaleHint": "Distance is multiplied by it — e.g. 0.01 if the drawing is cm and you want meters",
+  "cad.mClear": "Clear",
+  "cad.mExit": "Exit measuring",
+
   "msg.selectPdfOrImage": "Select a PDF or an image from the file list first",
   "msg.forImages": "That tool is for images — select an image from the list",
   "msg.forPdfUseImages": "That tool is for PDFs — for images use “From images”",

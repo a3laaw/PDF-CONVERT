@@ -261,6 +261,18 @@ export const hi: Record<string, string> = {
   "cad.addFirst": "पहले DWG या DXF फाइल जोड़ें — व्यूअर AutoCAD फाइलें ब्राउज़र में ही खोलता है",
   "cad.openFromBar": "AutoCAD फाइलें बार के «CAD व्यूअर» से खुलती हैं — बार के सबसे ऊपर",
 
+  /* माप टूल */
+  "cad.measure": "माप",
+  "cad.measureHint": "ड्रॉइंग पर दो या अधिक बिंदु क्लिक करें — दूरी तुरंत दिखेगी · माप के दौरान व्हील से ज़ूम चलता रहेगा",
+  "cad.mNone": "मापने के लिए ड्रॉइंग पर दो बिंदु क्लिक करें",
+  "cad.mTotal": "कुल",
+  "cad.mAngle": "कोण",
+  "cad.mUnit": "यूनिट",
+  "cad.mScale": "ड्रॉइंग यूनिट",
+  "cad.mScaleHint": "दूरी इससे गुणा होती है — जैसे 0.01 अगर ड्रॉइंग सेंटीमीटर में हो और मीटर चाहिए",
+  "cad.mClear": "साफ़",
+  "cad.mExit": "माप बंद करें",
+
   "msg.selectPdfOrImage": "पहले लिस्ट से PDF या फोटो चुनें",
   "msg.forImages": "यह टूल फोटो के लिए है — लिस्ट से फोटो चुनें",
   "msg.forPdfUseImages": "यह टूल PDF के लिए है — फोटो के लिए «फोटो से PDF» लें",
