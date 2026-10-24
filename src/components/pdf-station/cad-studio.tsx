@@ -37,7 +37,7 @@ const FAMILIES: Record<CadFamily, FamilyDef> = {
     accept: ".dxf,.dwg",
     exts: new Set(["dxf", "dwg"]),
     hero: "اعرض المخطط على الشاشة أولًا، ثم حوّله إلى PDF بأداة واحدة",
-    truth: "DXF يُعرض ويُحوّل متجهيًا 100% · DWG يُعرض بالمعاينة المدمجة (أفضل جهد)",
+    truth: "DXF وDWG يُعرضان ويُحوّلان متجهيًا عبر LibreDWG · مع احتياط المعاينة المدمجة",
   },
   rvt: {
     title: "استوديو ريفيت",
@@ -548,7 +548,7 @@ export function CadStudio({ family }: { family: CadFamily }) {
                       <div className="px-6">
                         <ImageOff className="mx-auto size-8 text-amber-600" aria-hidden />
                         <p className="mt-3 text-sm font-extrabold">
-                          لا توجد معاينة مدمجة داخل هذا الملف
+                          لم نتمكن من توليد معاينة لهذا الملف
                         </p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
                           {active.note || F.truth}

@@ -254,3 +254,25 @@ Stage Summary:
 - المعمارية الجديدة المعتمدة: استوديو لكل عائلة صيغ بنفس نمط استوديو PDF — العرض أولًا (فوري من الخادم بخصوصية حذف) ثم التحويل بأداة واحدة، ومقياس الجودة الصادق ظاهر دائمًا (متجهي/تسطيح/معاينة مدمجة/لا شيء)
 - الحد الموثق: DWG/RVT/INDD عرض «أفضل جهد» بالمعاينة المدمجة — الترقية المتجهية الكاملة تتطلب تكامل ODA (مهام 2-10 المفقودة) أو تصدير DXF/PDF من البرنامج الأصلي
 - الملفات: scripts/convert_to_pdf.py (cmd_preview)، src/lib/server-convert.ts، src/app/api/cad-preview/route.ts، src/components/pdf-station/cad-studio.tsx، header-bar.tsx، page.tsx، workbench.tsx
+
+---
+Task ID: 22
+Agent: main (Z.ai)
+Task: 用户实测发现无内嵌预览的 DWG（DR-UR.dwg 591KB 单页）显示"该文件内无支持的预览" → 要求补全。方案：构建 LibreDWG 开源引擎，DWG 无内嵌图时直接矢量渲染+矢量转换。
+
+Work Log:
+- 根因确认：convert_to_pdf.py 的 DWG 预览只依赖内嵌缩略图（extract_dwg_preview），部分 DWG（如用户文件）保存时不含缩略图 → quality=none 橙色状态。转换端 convert_dwg 同样只能产出信息页。
+- 构建 LibreDWG 0.14（GPLv3，github release tarball）到 /home/z/.local：./configure --disable-bindings --disable-docs --disable-shared --enable-static，make -j2，make install → /home/z/.local/bin/dwg2dxf + dwgwrite（静态链接 16MB）。冒烟测试：dwgwrite 生成的 DWG 实体链损坏（其写入为实验性，0 实体）——真实 DWG 才是 LibreDWG 的主场。
+- 真实样本验证：LibreDWG 自带 test-data（example_2018.dwg AC1032 / sample_2018.dwg / example_2000.dwg AC1015）全部 dwg2dxf 成功 → ezdxf 渲染出真实图形（polyline + "Valorò" 文字）。
+- 引擎改造 convert_to_pdf.py：新增 _find_dwg2dxf()/dwg_to_dxf()（timeout 100s、临时 DXF 由调用方 try/finally 删除）；①cmd_preview DWG 分支三级链：LibreDWG 矢量渲染（n_ent==0 视为失败）→ 内嵌缩略图 → none；②convert_dwg 两级链：LibreDWG→convert_dxf 全矢量 PDF（engine='dwg-vector (LibreDWG+ezdxf)'）→ 回退信息页。
+- 关键发现：example_2018.dwg 本身就无内嵌缩略图（sentinel 不存在、extract 返回 NONE）——天然等于用户场景。修复前=橙色无预览，修复后=quality=vector 66 实体。
+- 引擎测试 3/3：preview 全部 quality=vector；convert 产出 3/1/3 页矢量 PDF（133KB），fitz 打开确认第 1 页为真实图形。临时 DXF 无残留。
+- UI 更新 cad-studio.tsx：DWG 家族 truth 文案改「DXF وDWG يُعرضان ويُحوّلان متجهيًا عبر LibreDWG · مع احتياط المعاينة المدمجة」；nopreview 面板标题改「لم نتمكن من توليد معاينة لهذا الملف」。
+- 浏览器 E2E（预览域→localhost:3000）：أوتوكاد 标签→上传 floor-plan.dwg（example_2018 改名，无内嵌预览）→预览出现+徽章「متجهي 100%」+note「معاينة متجهية كاملة…عبر محرك LibreDWG」+info Preview source=LibreDWG vector render→放大两档 200% 截图→تحويل إلى PDF(١)→结果区出现→معاينة 对话框显示 floor-plan.pdf 3 页、第 1 页为真实图形（非信息页）。移动端 390x844 重复上传链路：徽章+查看器+info 芯片（Entities 66/Version AutoCAD 2018-2026/Preview source）全部正确，截图 04_mobile_dwg.png。
+- 校验：tsc 仅剩 scripts/test_split_node.ts 既有错误（src/ 零错误）；eslint cad-studio 干净；dev.log 无新错误。
+
+Stage Summary:
+- DWG 预览与转换双升级：无内嵌缩略图的 DWG 现在获得「متجهي 100%」真矢量预览 + 真矢量 PDF（LibreDWG→ezdxf），只有 LibreDWG 也失败时才回退内嵌图/信息页。
+- 披露义务：LibreDWG GPLv3（独立进程调用），后续页脚披露表需加一行；ODA 仍是从 AutoCAD 端 100% 保真的金标准（LibreDWG 对复杂 DWG 可能部分实体缺失）。
+- 证据：scripts/t_out/e2e/{01_dwg_vector_preview,02_dwg_zoom200,03_dwg_result_dialog,04_mobile_dwg}.png；引擎测试 scripts/engine_test_dwg.py。
+- 用户文件 DR-UR.dwg 请其重新上传即可看到矢量预览（AC1032 版本已被真实样本覆盖）。

@@ -9,7 +9,7 @@ Usage:
   python3 convert_to_pdf.py preview <input_file> <output_png>
 Protocol: prints "@@RESULT@@{json}" as the LAST stdout line.
 """
-import sys, os, io, json, re, struct, subprocess, datetime
+import sys, os, io, json, re, struct, subprocess, datetime, shutil
 
 RESULT = {"ok": False, "engine": "", "pages": 0, "note_ar": "", "info": {}, "error": ""}
 
@@ -289,6 +289,35 @@ def extract_dwg_preview(data: bytes):
         i += 1
     return None
 
+def _find_dwg2dxf():
+    for p in ('/home/z/.local/bin/dwg2dxf', '/usr/local/bin/dwg2dxf', '/usr/bin/dwg2dxf'):
+        if os.path.exists(p):
+            return p
+    return shutil.which('dwg2dxf')
+
+def dwg_to_dxf(inp):
+    """DWG -> DXF عبر LibreDWG (dwg2dxf) — يسمح بالرسم المتجهي والتحويل الكامل.
+    يعيد مسار DXF مؤقت (بجانب الملف الأصلي، على المتصل حذفه) أو None عند الفشل."""
+    binp = _find_dwg2dxf()
+    if not binp:
+        return None
+    out = inp + '.libredwg.dxf'
+    if os.path.exists(out):
+        os.remove(out)
+    try:
+        proc = subprocess.run([binp, '-o', out, inp], capture_output=True, timeout=100)
+        if (proc.returncode != 0 or not os.path.exists(out)
+                or os.path.getsize(out) < 100):
+            if os.path.exists(out):
+                os.remove(out)
+            return None
+        return out
+    except Exception as e:
+        print('dwg_to_dxf failed:', e, file=sys.stderr)
+        if os.path.exists(out):
+            os.remove(out)
+        return None
+
 def convert_dxf(inp, outp):
     import matplotlib
     matplotlib.use('Agg')
@@ -347,26 +376,52 @@ def convert_dwg(inp, outp):
         data = f.read()
     ver_raw = data[:6].decode('ascii', 'ignore')
     ver = DWG_VERSIONS.get(ver_raw, ver_raw or '?')
+    RESULT['info'] = {'Format': 'AutoCAD DWG', 'Version': ver, 'File size': human_size(len(data))}
+
+    # 1) الأولوية: تحويل متجهي كامل عبر LibreDWG (DWG -> DXF -> PDF)
+    dxf = None
+    vector_ok = False
+    try:
+        dxf = dwg_to_dxf(inp)
+        if dxf:
+            convert_dxf(dxf, outp)
+            vector_ok = True
+            RESULT['engine'] = 'dwg-vector (LibreDWG+ezdxf)'
+            RESULT['info']['Format'] = 'AutoCAD DWG'
+            RESULT['info']['Version'] = ver
+            RESULT['info']['File size'] = human_size(len(data))
+            RESULT['info']['Converted as'] = 'متجهات حقيقية — LibreDWG'
+            RESULT['note_ar'] = ('تم تحويل DWG إلى PDF متجهي كامل عبر محرك LibreDWG المفتوح: '
+                                 'خطوط ونصوص حقيقية تتحمل التكبير بدون فقدان جودة.')
+    except Exception as e:
+        print('dwg libredwg convert failed:', e, file=sys.stderr)
+        vector_ok = False
+    finally:
+        if dxf and os.path.exists(dxf):
+            os.remove(dxf)
+    if vector_ok:
+        return
+
+    # 2) احتياط: صفحة معلومات + المعاينة المدمجة إن وُجدت
     img = None
     try:
         img = extract_dwg_preview(data)
     except Exception as e:
         print('dwg preview error:', e, file=sys.stderr)
-    RESULT['info'] = {'Format': 'AutoCAD DWG', 'Version': ver, 'File size': human_size(len(data))}
     if img is not None:
         RESULT['engine'] = 'dwg-preview'
-        RESULT['note_ar'] = ('تم استخراج المعاينة المدمجة من ملف DWG. لتحويل متجهي كامل '
-                             '100% استخدم AutoCAD أو ODA File Converter ثم ارفع ملف DXF هنا.')
+        RESULT['note_ar'] = ('لم يكتمل التحويل المتجهي لهذا الملف، فاستخرجنا المعاينة المدمجة التي '
+                             'يحفظها AutoCAD. للحصول على PDF متجهي كامل صدّر DXF من AutoCAD وارفعه هنا.')
     else:
         RESULT['engine'] = 'dwg-info'
-        RESULT['note_ar'] = ('لم يُعثر على معاينة مدمجة في هذا الملف. صُدر الـ PDF بدون صورة، '
-                             'ويمكنك تصدير DXF من AutoCAD للحصول على تحويل متجهي كامل.')
+        RESULT['note_ar'] = ('لم نتمكن من تحويل هذا الملف متجهيًا ولا من استخراج معاينة مدمجة. '
+                             'الحل الأضمن: صدّر DXF من AutoCAD ثم ارفعه هنا للتحويل المتجهي الكامل.')
     build_info_pdf(outp, os.path.basename(inp), img,
                    [('الصيغة', 'AutoCAD DWG'), ('الإصدار', ver),
                     ('حجم الملف', human_size(len(data))),
                     ('طريقة التحويل', 'أفضل جهد — معاينة مدمجة' if img else 'بدون معاينة مدمجة')],
                    note_ar=RESULT['note_ar'],
-                   note_en='DWG is a closed binary format; full vector conversion requires ODA/AutoCAD.')
+                   note_en='DWG is a closed binary format; vector conversion via LibreDWG was attempted.')
     RESULT['pages'] = 1
 
 def convert_rvt(inp, outp):
@@ -775,17 +830,42 @@ def cmd_preview(inp, out_png):
         ver = DWG_VERSIONS.get(ver_raw, ver_raw or '?')
         RESULT['info']['Format'] = 'AutoCAD DWG'
         RESULT['info']['Version'] = ver
+        # 1) الأولوية: رسم الملف نفسه متجهيًا عبر LibreDWG — يعمل حتى لو بلا معاينة مدمجة
+        dxf = None
         try:
-            img = extract_dwg_preview(data)
+            dxf = dwg_to_dxf(inp)
+            if dxf:
+                from ezdxf import recover
+                doc_dwg, _ = recover.readfile(dxf)
+                n_ent = len(doc_dwg.modelspace())
+                RESULT['info']['Entities (model)'] = str(n_ent)
+                if n_ent == 0:
+                    raise RuntimeError('libredwg produced an empty drawing')
+                _render_dxf_png(dxf, out_png)
+                quality = 'vector'
+                RESULT['info']['Preview source'] = 'LibreDWG vector render'
+                RESULT['note_ar'] = ('معاينة متجهية كاملة: أعدنا رسم محتوى الملف نفسه (خطوط ونصوص '
+                                     'حقيقية) عبر محرك LibreDWG المفتوح — تتحمل أي تكبير.')
         except Exception as e:
-            print('dwg preview error:', e, file=sys.stderr)
-        if img is not None:
-            RESULT['note_ar'] = ('المعاينة المدمجة التي يحفظها AutoCAD داخل الملف — '
-                                 'تكفي للفحص قبل الطباعة، والجودة المتجهية الكاملة تتطلب DXF.')
-        else:
-            quality = 'none'
-            RESULT['note_ar'] = ('لا توجد معاينة مدمجة داخل هذا الملف — التحويل سيُنتج صفحة '
-                                 'معلومات فقط، والأفضل تصدير DXF من AutoCAD.')
+            print('dwg libredwg vector preview failed:', e, file=sys.stderr)
+        finally:
+            if dxf and os.path.exists(dxf):
+                os.remove(dxf)
+        # 2) احتياط: المعاينة المدمجة ثم لا شيء
+        if quality != 'vector':
+            try:
+                img = extract_dwg_preview(data)
+            except Exception as e:
+                print('dwg preview error:', e, file=sys.stderr)
+            if img is not None:
+                quality = 'preview'
+                RESULT['info']['Preview source'] = 'embedded thumbnail'
+                RESULT['note_ar'] = ('المعاينة المدمجة التي يحفظها AutoCAD داخل الملف — تكفي '
+                                     'للفحص قبل الطباعة، والتحويل المتجهي الكامل يتطلب DXF.')
+            else:
+                quality = 'none'
+                RESULT['note_ar'] = ('لم نتمكن من رسم هذا الملف ولا من استخراج معاينة مدمجة — '
+                                     'التحويل سينتج صفحة معلومات، والأضمن تصدير DXF من AutoCAD.')
     elif kind == 'rvt':
         RESULT['info']['Format'] = 'Autodesk Revit (RVT)'
         img = _rvt_preview_image(data, RESULT['info'])
