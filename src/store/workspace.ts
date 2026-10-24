@@ -69,6 +69,7 @@ interface WorkspaceState {
   run: () => Promise<void>;
   runOnFiles: (op: OpId, params: Record<string, string>, fileIds: string[]) => Promise<void>;
   addEditorResult: (name: string, blob: Blob) => void;
+  addResults: (items: { name: string; blob: Blob }[]) => void;
   renameResult: (id: string, name: string) => void;
   clearResults: () => void;
   downloadAll: () => Promise<void>;
@@ -359,6 +360,27 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       ],
       runState: "done",
       runMessage: "تم! ملف جاهز",
+      runProgress: 1,
+    });
+  },
+
+  /* عدة نتائج جاهزة دفعة واحدة (الفصل البصري: مفصولة + متبقية) */
+  addResults: (items) => {
+    get().results.forEach((r) => URL.revokeObjectURL(r.url));
+    const taken = new Set<string>();
+    const results: ResultFile[] = items.map(({ name, blob }) => ({
+      id: nanoid(),
+      name: uniqueName(name, taken),
+      blob,
+      url: URL.createObjectURL(blob),
+      size: blob.size,
+      fromStep: "visual-split",
+      kind: blob.type.includes("pdf") ? "pdf" : "image",
+    }));
+    set({
+      results,
+      runState: "done",
+      runMessage: `تم! ${toHindiDigits(results.length)} ${results.length === 1 ? "ملف جاهز" : "ملفات جاهزة"}`,
       runProgress: 1,
     });
   },

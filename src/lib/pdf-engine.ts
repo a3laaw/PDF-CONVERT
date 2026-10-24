@@ -4,7 +4,7 @@
 import { PDFDocument, degrees, rgb, StandardFonts } from "pdf-lib";
 import { toHindiDigits } from "./arabic";
 import { parsePageRanges } from "./interpreter";
-import { resultName } from "./naming";
+import { resultName, stripExt } from "./naming";
 import type { ResultFile } from "./types";
 
 /* ─────────── أدوات داخلية ─────────── */
@@ -332,6 +332,35 @@ async function opSplit(inputs: EngineInput[], label: string, ctx: RunContext): P
     }
   }
   return results;
+}
+
+/* فصل بصري بعمودين: الصفحات المسحوبة → ملف «المفصولة» والباقي → ملف «المتبقية» */
+export interface SplitOutcome {
+  separated: { name: string; blob: Blob } | null;
+  remainder: { name: string; blob: Blob } | null;
+}
+
+export async function splitPagesVisual(file: File, pages: number[]): Promise<SplitOutcome> {
+  const bytes = await bytesOf({ id: "", name: file.name, kind: "pdf", file });
+  const src = await loadPdfLib(bytes);
+  const total = src.getPageCount();
+  const chosen = [...new Set(pages)].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  if (chosen.length === 0) throw new Error("عمود الفصل فارغ — اسحب صفحة واحدة على الأقل");
+  const rest = Array.from({ length: total }, (_, i) => i + 1).filter((p) => !chosen.includes(p));
+
+  const mk = async (pageNos: number[], name: string): Promise<{ name: string; blob: Blob }> => {
+    const out = await PDFDocument.create();
+    const copied = await out.copyPages(src, pageNos.map((p) => p - 1));
+    copied.forEach((p) => out.addPage(p));
+    const saved = await out.save({ useObjectStreams: true });
+    const blob = new Blob([saved as unknown as BlobPart], { type: "application/pdf" });
+    return { name, blob };
+  };
+
+  const base = stripExt(file.name);
+  const separated = await mk(chosen, `${base} — الصفحات-المفصولة.pdf`);
+  const remainder = rest.length > 0 ? await mk(rest, `${base} — الصفحات-المتبقية.pdf`) : null;
+  return { separated, remainder };
 }
 
 /* ختم (علامة مائية) */

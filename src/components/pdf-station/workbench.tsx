@@ -9,6 +9,7 @@ import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
 import { downloadBlob, openBlobInNewTab, pdfPageThumbs } from "@/lib/pdf-engine";
 import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
+import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { toHindiDigits } from "@/lib/arabic";
 import { toast } from "sonner";
 import type { FileKind, OpId, ResultFile } from "@/lib/types";
@@ -214,6 +215,9 @@ export function Workbench() {
   const editorEnabled =
     activeFile?.kind === "pdf" || activeFile?.kind === "image";
 
+  /* وضع الفصل البصري بعمودين */
+  const splitMode = tool === "split" && activeFile?.kind === "pdf";
+
   const pickTool = (id: OpId) => {
     setTool(id);
     const def: Record<string, string> = {};
@@ -395,7 +399,9 @@ export function Workbench() {
                     }
                     if (ok) {
                       setEditing(false);
-                      pickTool(id);
+                      /* النقر على «فصل» وهي مفتوحة يغلقها */
+                      if (id === "split" && tool === "split") setTool(null);
+                      else pickTool(id);
                     } else hintDisabled(id);
                   }}
                   className={cn(
@@ -414,7 +420,7 @@ export function Workbench() {
             })}
           </div>
 
-          {/* ─── الجسم: ملفات + صفحات + معاينة ─── */}
+          {/* ─── الجسم: ملفات + (فصل بعمودين | صفحات + معاينة) ─── */}
           <div className="mt-4 grid gap-4 lg:grid-cols-[200px_130px_1fr]">
             <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-3">
               <p className="px-1 text-[11px] font-bold text-muted-foreground">الملفات</p>
@@ -491,6 +497,17 @@ export function Workbench() {
               </div>
             </div>
 
+            {splitMode ? (
+              <div className="lg:col-span-2">
+                <SplitPanel
+                  fileName={activeFile.name}
+                  file={activeFile.file}
+                  pages={activeFile.pages ?? thumbs[activeFile.id]?.length ?? 1}
+                  onClose={() => setTool(null)}
+                />
+              </div>
+            ) : (
+            <>
             <div className="hidden max-h-[560px] flex-col gap-2 overflow-y-auto rounded-2xl border border-border bg-white p-3 lg:flex">
               <p className="px-1 text-[11px] font-bold text-muted-foreground">الصفحات</p>
               {activeFile?.kind === "pdf" &&
@@ -576,10 +593,12 @@ export function Workbench() {
                 </>
               )}
             </div>
+            </>
+            )}
           </div>
 
-          {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة (يُخفى أثناء التعديل) ─── */}
-          {!editing && (
+          {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة (يُخفى أثناء التعديل والفصل) ─── */}
+          {!editing && !splitMode && (
             <>
               <div className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm">
             {tool === "remove_watermark" && (

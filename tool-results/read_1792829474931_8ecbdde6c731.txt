@@ -1,0 +1,776 @@
+     1→/* محرك PDF «محطّة PDF» — يعمل بالكامل داخل متصفح المستخدم (خصوصية تامة)
+     2→   pdf-lib للتعديل + pdfjs للعرض والاستخراج + Canvas للنص العربي المُشكَّل */
+     3→
+     4→import { PDFDocument, degrees, rgb, StandardFonts } from "pdf-lib";
+     5→import { toHindiDigits } from "./arabic";
+     6→import { parsePageRanges } from "./interpreter";
+     7→import { resultName } from "./naming";
+     8→import type { ResultFile } from "./types";
+     9→
+    10→/* ─────────── أدوات داخلية ─────────── */
+    11→
+    12→let workerReady = false;
+    13→async function getPdfjs() {
+    14→  const pdfjs = await import("pdfjs-dist");
+    15→  if (!workerReady) {
+    16→    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    17→    workerReady = true;
+    18→  }
+    19→  return pdfjs;
+    20→}
+    21→
+    22→async function loadPdfLib(bytes: Uint8Array): Promise<PDFDocument> {
+    23→  return PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+    24→}
+    25→
+    26→/** نص عربي → PNG شفاف عبر Canvas (تشكيل حروف مثالي بواسطة المتصفح) */
+    27→async function arabicTextPng(
+    28→  text: string,
+    29→  opts: { size: number; color: string; bold?: boolean }
+    30→): Promise<{ bytes: Uint8Array; w: number; h: number }> {
+    31→  const font = `${opts.bold ? "700" : "500"} ${opts.size}px Tajawal, "Noto Sans Arabic", sans-serif`;
+    32→  try {
+    33→    await document.fonts.load(font, text);
+    34→  } catch {
+    35→    /* الخط غير متاح — نكمل بخط النظام */
+    36→  }
+    37→  const canvas = document.createElement("canvas");
+    38→  const ctx = canvas.getContext("2d")!;
+    39→  ctx.font = font;
+    40→  const metrics = ctx.measureText(text);
+    41→  const pad = Math.ceil(opts.size * 0.25);
+    42→  canvas.width = Math.ceil(metrics.width) + pad * 2;
+    43→  canvas.height = Math.ceil(opts.size * 1.45);
+    44→  const ctx2 = canvas.getContext("2d")!;
+    45→  ctx2.clearRect(0, 0, canvas.width, canvas.height);
+    46→  ctx2.font = font;
+    47→  ctx2.textAlign = "center";
+    48→  ctx2.textBaseline = "middle";
+    49→  ctx2.fillStyle = opts.color;
+    50→  ctx2.direction = "rtl";
+    51→  ctx2.fillText(text, canvas.width / 2, canvas.height / 2);
+    52→  const dataUrl = canvas.toDataURL("image/png");
+    53→  const res = await fetch(dataUrl);
+    54→  const buf = new Uint8Array(await res.arrayBuffer());
+    55→  return { bytes: buf, w: canvas.width, h: canvas.height };
+    56→}
+    57→
+    58→function resultFile(name: string, bytes: Uint8Array | Blob, fromStep: string, kind: ResultFile["kind"]): ResultFile {
+    59→  const blob = bytes instanceof Blob ? bytes : new Blob([bytes.buffer as ArrayBuffer], { type: mimeOf(name) });
+    60→  return {
+    61→    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    62→    name,
+    63→    blob,
+    64→    url: URL.createObjectURL(blob),
+    65→    size: blob.size,
+    66→    fromStep,
+    67→    kind,
+    68→  };
+    69→}
+    70→
+    71→function mimeOf(name: string): string {
+    72→  if (name.endsWith(".pdf")) return "application/pdf";
+    73→  if (name.endsWith(".png")) return "image/png";
+    74→  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+    75→  if (name.endsWith(".txt")) return "text/plain;charset=utf-8";
+    76→  if (name.endsWith(".zip")) return "application/zip";
+    77→  return "application/octet-stream";
+    78→}
+    79→
+    80→export interface EngineInput {
+    81→  id: string;
+    82→  name: string;
+    83→  kind: string;
+    84→  file: File;
+    85→}
+    86→
+    87→/** تحميل بايتات ملف الإدخال */
+    88→async function bytesOf(input: EngineInput): Promise<Uint8Array> {
+    89→  return new Uint8Array(await input.file.arrayBuffer());
+    90→}
+    91→
+    92→/* ─────────── العمليات ─────────── */
+    93→
+    94→export interface RunContext {
+    95→  onProgress?: (msg: string) => void;
+    96→}
+    97→
+    98→export async function runOp(
+    99→  op: string,
+   100→  inputs: EngineInput[],
+   101→  params: Record<string, string>,
+   102→  label: string,
+   103→  ctx: RunContext = {}
+   104→): Promise<ResultFile[]> {
+   105→  if (inputs.length === 0) {
+   106→    throw new Error("لا توجد ملفات مناسبة لهذه الخطوة — أضف ملفاتك أولًا");
+   107→  }
+   108→  switch (op) {
+   109→    case "merge":
+   110→      return opMerge(inputs, label, ctx);
+   111→    case "compress":
+   112→      return opCompress(inputs, params, label, ctx);
+   113→    case "extract":
+   114→      return opExtractOrDelete(inputs, params, "extract", label, ctx);
+   115→    case "delete":
+   116→      return opExtractOrDelete(inputs, params, "delete", label, ctx);
+   117→    case "rotate":
+   118→      return opRotate(inputs, params, label, ctx);
+   119→    case "reorder":
+   120→      return opReorder(inputs, params, label, ctx);
+   121→    case "split":
+   122→      return opSplit(inputs, label, ctx);
+   123→    case "watermark":
+   124→      return opWatermark(inputs, params, label, ctx);
+   125→    case "remove_watermark":
+   126→      return opRemoveWatermark(inputs, params, label, ctx);
+   127→    case "page_numbers":
+   128→      return opPageNumbers(inputs, params, label, ctx);
+   129→    case "images_to_pdf":
+   130→      return opImagesToPdf(inputs, params, label, ctx);
+   131→    case "pdf_to_images":
+   132→      return opPdfToImages(inputs, params, label, ctx);
+   133→    case "extract_text":
+   134→      return opExtractText(inputs, label, ctx);
+   135→    case "metadata":
+   136→      return opMetadata(inputs, params, label, ctx);
+   137→    case "nup":
+   138→      return opNup(inputs, params, label, ctx);
+   139→    default:
+   140→      throw new Error("عملية غير معروفة");
+   141→  }
+   142→}
+   143→
+   144→/* دمج */
+   145→async function opMerge(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {
+   146→  ctx.onProgress?.(`جارٍ دمج ${inputs.length} ملفات…`);
+   147→  const out = await PDFDocument.create();
+   148→  for (const input of inputs) {
+   149→    const src = await loadPdfLib(await bytesOf(input));
+   150→    const pages = await out.copyPages(src, src.getPageIndices());
+   151→    pages.forEach((p) => out.addPage(p));
+   152→  }
+   153→  const bytes = await out.save({ useObjectStreams: true });
+   154→  return [resultFile(resultName("merge", inputs[0].name), bytes, label, "pdf")];
+   155→}
+   156→
+   157→/* تصغير الحجم — ثلاثة مستويات بذكاء:
+   158→   ملف نصي → ضغط الهيكل فقط (الترقيم الصوري يكبّر النصي)
+   159→   ملف ممسوح → إعادة بناء الصفحات كصور JPEG (توفير حقيقي) */
+   160→async function hasTextLayer(bytes: Uint8Array): Promise<boolean> {
+   161→  try {
+   162→    const pdfjs = await getPdfjs();
+   163→    const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+   164→    let len = 0;
+   165→    for (let i = 1; i <= Math.min(2, doc.numPages); i++) {
+   166→      const page = await doc.getPage(i);
+   167→      const tc = await page.getTextContent();
+   168→      len += tc.items.reduce((acc, it) => acc + ("str" in it ? it.str.trim().length : 0), 0);
+   169→    }
+   170→    return len >= 20;
+   171→  } catch {
+   172→    return false;
+   173→  }
+   174→}
+   175→
+   176→async function opCompress(
+   177→  inputs: EngineInput[],
+   178→  params: Record<string, string>,
+   179→  label: string,
+   180→  ctx: RunContext
+   181→): Promise<ResultFile[]> {
+   182→  const level = params.level ?? "متوسط";
+   183→  const results: ResultFile[] = [];
+   184→  for (const input of inputs) {
+   185→    ctx.onProgress?.(`جارٍ تصغير حجم «${input.name}»…`);
+   186→    const bytes = await bytesOf(input);
+   187→    const textual = await hasTextLayer(bytes);
+   188→    if (!textual) {
+   189→      // ملف ممسوح: إعادة بناء بجودة حسب المستوى
+   190→      const pdfjs = await getPdfjs();
+   191→      const src = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+   192→      const out = await PDFDocument.create();
+   193→      const scale = level === "متوسط" ? 1.5 : 1.05;
+   194→      const quality = level === "متوسط" ? 0.8 : 0.55;
+   195→      for (let i = 1; i <= src.numPages; i++) {
+   196→        ctx.onProgress?.(`إعادة بناء الصفحة ${i} من ${src.numPages}…`);
+   197→        const page = await src.getPage(i);
+   198→        const viewport = page.getViewport({ scale });
+   199→        const canvas = document.createElement("canvas");
+   200→        canvas.width = Math.floor(viewport.width);
+   201→        canvas.height = Math.floor(viewport.height);
+   202→        const c2 = canvas.getContext("2d")!;
+   203→        c2.fillStyle = "#ffffff";
+   204→        c2.fillRect(0, 0, canvas.width, canvas.height);
+   205→        await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+   206→        const jpegUrl = canvas.toDataURL("image/jpeg", quality);
+   207→        const res = await fetch(jpegUrl);
+   208→        const jpegBytes = new Uint8Array(await res.arrayBuffer());
+   209→        const img = await out.embedJpg(jpegBytes);
+   210→        const p = out.addPage([
+   211→          page.getViewport({ scale: 1 }).width,
+   212→          page.getViewport({ scale: 1 }).height,
+   213→        ]);
+   214→        p.drawImage(img, { x: 0, y: 0, width: p.getWidth(), height: p.getHeight() });
+   215→      }
+   216→      const saved = await out.save({ useObjectStreams: true });
+   217→      results.push(resultFile(resultName("compress", input.name), saved, label, "pdf"));
+   218→    } else {
+   219→      // ملف نصي: ضغط الهيكل + تنظيف البيانات في المتوسط والقوي
+   220→      const doc = await loadPdfLib(bytes);
+   221→      if (level !== "خفيف") {
+   222→        doc.setTitle("");
+   223→        doc.setAuthor("");
+   224→        doc.setSubject("");
+   225→        doc.setKeywords([]);
+   226→      }
+   227→      const saved = await doc.save({ useObjectStreams: true });
+   228→      results.push(resultFile(resultName("compress", input.name), saved, label, "pdf"));
+   229→    }
+   230→  }
+   231→  return results;
+   232→}
+   233→
+   234→/* استخراج / حذف صفحات */
+   235→async function opExtractOrDelete(
+   236→  inputs: EngineInput[],
+   237→  params: Record<string, string>,
+   238→  mode: "extract" | "delete",
+   239→  label: string,
+   240→  ctx: RunContext
+   241→): Promise<ResultFile[]> {
+   242→  const results: ResultFile[] = [];
+   243→  for (const input of inputs) {
+   244→    ctx.onProgress?.(`جارٍ ${mode === "extract" ? "استخراج" : "حذف"} الصفحات من «${input.name}»…`);
+   245→    const src = await loadPdfLib(await bytesOf(input));
+   246→    const total = src.getPageCount();
+   247→    const pages = parsePageRanges(params.pages ?? "", total);
+   248→    const keep =
+   249→      mode === "extract"
+   250→        ? pages.map((p) => p - 1)
+   251→        : Array.from({ length: total }, (_, i) => i + 1)
+   252→            .filter((p) => !pages.includes(p))
+   253→            .map((p) => p - 1);
+   254→    if (keep.length === 0) {
+   255→      throw new Error("لا توجد صفحات متبقية بعد هذه العملية — راجع الأرقام المختارة");
+   256→    }
+   257→    const out = await PDFDocument.create();
+   258→    const copied = await out.copyPages(src, keep);
+   259→    copied.forEach((p) => out.addPage(p));
+   260→    const saved = await out.save({ useObjectStreams: true });
+   261→    results.push(resultFile(resultName(mode, input.name), saved, label, "pdf"));
+   262→  }
+   263→  return results;
+   264→}
+   265→
+   266→/* تدوير */
+   267→async function opRotate(
+   268→  inputs: EngineInput[],
+   269→  params: Record<string, string>,
+   270→  label: string,
+   271→  ctx: RunContext
+   272→): Promise<ResultFile[]> {
+   273→  const angle = Number(params.angle ?? "90");
+   274→  const results: ResultFile[] = [];
+   275→  for (const input of inputs) {
+   276→    ctx.onProgress?.(`جارٍ تدوير «${input.name}»…`);
+   277→    const doc = await loadPdfLib(await bytesOf(input));
+   278→    const total = doc.getPageCount();
+   279→    const pages = params.pages ? parsePageRanges(params.pages, total) : null;
+   280→    doc.getPages().forEach((page, idx) => {
+   281→      if (pages && !pages.includes(idx + 1)) return;
+   282→      const current = page.getRotation().angle;
+   283→      page.setRotation(degrees((current + angle) % 360));
+   284→    });
+   285→    const saved = await doc.save({ useObjectStreams: true });
+   286→    results.push(resultFile(resultName("rotate", input.name), saved, label, "pdf"));
+   287→  }
+   288→  return results;
+   289→}
+   290→
+   291→/* ترتيب */
+   292→async function opReorder(
+   293→  inputs: EngineInput[],
+   294→  params: Record<string, string>,
+   295→  label: string,
+   296→  ctx: RunContext
+   297→): Promise<ResultFile[]> {
+   298→  const results: ResultFile[] = [];
+   299→  for (const input of inputs) {
+   300→    ctx.onProgress?.(`جارٍ إعادة الترتيب…`);
+   301→    const src = await loadPdfLib(await bytesOf(input));
+   302→    const total = src.getPageCount();
+   303→    let order: number[];
+   304→    if (params.mode === "مخصص" && params.order) {
+   305→      order = parsePageRanges(params.order, total);
+   306→    } else {
+   307→      order = Array.from({ length: total }, (_, i) => total - i);
+   308→    }
+   309→    const out = await PDFDocument.create();
+   310→    const copied = await out.copyPages(src, order.map((p) => p - 1));
+   311→    copied.forEach((p) => out.addPage(p));
+   312→    const saved = await out.save({ useObjectStreams: true });
+   313→    results.push(resultFile(resultName("reorder", input.name), saved, label, "pdf"));
+   314→  }
+   315→  return results;
+   316→}
+   317→
+   318→/* فصل كل صفحة */
+   319→async function opSplit(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {
+   320→  const results: ResultFile[] = [];
+   321→  for (const input of inputs) {
+   322→    ctx.onProgress?.(`جارٍ فصل صفحات «${input.name}»…`);
+   323→    const src = await loadPdfLib(await bytesOf(input));
+   324→    const total = src.getPageCount();
+   325→    for (let i = 0; i < total; i++) {
+   326→      ctx.onProgress?.(`فصل «${input.name}»: الصفحة ${toHindiDigits(i + 1)} من ${toHindiDigits(total)}`);
+   327→      const out = await PDFDocument.create();
+   328→      const [page] = await out.copyPages(src, [i]);
+   329→      out.addPage(page);
+   330→      const saved = await out.save({ useObjectStreams: true });
+   331→      results.push(resultFile(resultName("split", input.name, i), saved, label, "pdf"));
+   332→    }
+   333→  }
+   334→  return results;
+   335→}
+   336→
+   337→/* ختم (علامة مائية) */
+   338→async function opWatermark(
+   339→  inputs: EngineInput[],
+   340→  params: Record<string, string>,
+   341→  label: string,
+   342→  ctx: RunContext
+   343→): Promise<ResultFile[]> {
+   344→  const text = params.text || "مسودة";
+   345→  const colorMap: Record<string, string> = { رمادي: "#6b7280", احمر: "#dc2626", ازرق: "#2563eb" };
+   346→  const color = colorMap[params.color ?? "رمادي"] ?? "#6b7280";
+   347→  const { bytes: png, w, h } = await arabicTextPng(text, { size: 88, color, bold: true });
+   348→  const results: ResultFile[] = [];
+   349→  for (const input of inputs) {
+   350→    ctx.onProgress?.(`جارٍ ختم «${input.name}»…`);
+   351→    const doc = await loadPdfLib(await bytesOf(input));
+   352→    const img = await doc.embedPng(png);
+   353→    for (const page of doc.getPages()) {
+   354→      const pw = page.getWidth();
+   355→      const ph = page.getHeight();
+   356→      const targetW = pw * 0.62;
+   357→      const targetH = (h / w) * targetW;
+   358→      const theta = (45 * Math.PI) / 180;
+   359→      const cx = pw / 2;
+   360→      const cy = ph / 2;
+   361→      const ox = (targetW / 2) * Math.cos(theta) - (targetH / 2) * Math.sin(theta);
+   362→      const oy = (targetW / 2) * Math.sin(theta) + (targetH / 2) * Math.cos(theta);
+   363→      page.drawImage(img, {
+   364→        x: cx - ox,
+   365→        y: cy - oy,
+   366→        width: targetW,
+   367→        height: targetH,
+   368→        rotate: degrees(45),
+   369→        opacity: 0.16,
+   370→      });
+   371→    }
+   372→    const saved = await doc.save({ useObjectStreams: true });
+   373→    results.push(resultFile(resultName("watermark", input.name), saved, label, "pdf"));
+   374→  }
+   375→  return results;
+   376→}
+   377→
+   378→/* حذف العلامة المائية — المعالجة على الخادم (PyMuPDF) مع حذف الملف فورًا.
+   379→   نحذف: نصوص العلامة المطابقة (بكل صيغ العربية: منطقي/معكوس/مُشكَّل) + الطوابع والتعليقات.
+   380→   لا تُحذف العلامات المرسومة كصور مدمجة داخل الصفحة. */
+   381→async function opRemoveWatermark(
+   382→  inputs: EngineInput[],
+   383→  params: Record<string, string>,
+   384→  label: string,
+   385→  ctx: RunContext
+   386→): Promise<ResultFile[]> {
+   387→  const results: ResultFile[] = [];
+   388→  for (const input of inputs) {
+   389→    ctx.onProgress?.(`جارٍ تنظيف العلامات من «${input.name}»…`);
+   390→    const fd = new FormData();
+   391→    fd.append("file", input.file, input.name);
+   392→    fd.append("texts", params.text ?? "");
+   393→    fd.append("annots", "1");
+   394→    const ctrl = new AbortController();
+   395→    const timer = setTimeout(() => ctrl.abort(), 180_000);
+   396→    let res: Response;
+   397→    try {
+   398→      res = await fetch("/api/unmark", { method: "POST", body: fd, signal: ctrl.signal });
+   399→    } catch {
+   400→      throw new Error("انقطع الاتصال بالخادم أثناء التنظيف — تحقق من الشبكة وأعد المحاولة");
+   401→    } finally {
+   402→      clearTimeout(timer);
+   403→    }
+   404→    if (!res.ok) {
+   405→      let msg = "تعذر تنظيف العلامة المائية";
+   406→      try {
+   407→        const j = (await res.json()) as { error?: string };
+   408→        if (j?.error) msg = j.error;
+   409→      } catch {
+   410→        /* رد غير JSON */
+   411→      }
+   412→      throw new Error(msg);
+   413→    }
+   414→    const raw = res.headers.get("X-Unmark-Report");
+   415→    let report0: { pages?: number; annots?: number; hits?: number } | null = null;
+   416→    if (raw) {
+   417→      try {
+   418→        report0 = JSON.parse(decodeURIComponent(raw));
+   419→      } catch {
+   420→        /* بلا تقرير */
+   421→      }
+   422→    }
+   423→    const bytes = new Uint8Array(await res.arrayBuffer());
+   424→    if (bytes.length === 0) throw new Error("جاء رد الخادم فارغًا — أعد المحاولة");
+   425→    const report = report0;
+   426→    if (report && (report.hits ?? 0) === 0 && (report.annots ?? 0) === 0) {
+   427→      // ملف نظيف في الدفعة — نتجاوزه دون إفشال البقية
+   428→      const { toast } = await import("sonner");
+   429→      toast.info(`«${input.name}»: لا توجد علامات مطابقة فيه — لم نغيّره`);
+   430→      continue;
+   431→    }
+   432→    const { toast } = await import("sonner");
+   433→    const parts: string[] = [];
+   434→    if (report?.hits) parts.push(`${toHindiDigits(report.hits)} موضع نصي`);
+   435→    if (report?.annots) parts.push(`${toHindiDigits(report.annots)} طابع/تعليق`);
+   436→    toast.success(`«${input.name}»: تم الحذف — ${parts.join(" و") || "بدون تغييرات"}`);
+   437→    const blob = new Blob([bytes], { type: "application/pdf" });
+   438→    results.push(resultFile(resultName("remove_watermark", input.name), blob, label, "pdf"));
+   439→  }
+   440→  if (results.length === 0 && inputs.length > 0) {
+   441→    throw new Error(
+   442→      "لم نجد ما يُحذف في الملفات المحددة — اكتب نص العلامة كما يظهر بالضبط، أو قد تكون العلامة مطبوعة داخل صور (تلك لا نستطيع حذفها)"
+   443→    );
+   444→  }
+   445→  return results;
+   446→}
+   447→
+   448→/* ترقيم الصفحات */
+   449→async function opPageNumbers(
+   450→  inputs: EngineInput[],
+   451→  params: Record<string, string>,
+   452→  label: string,
+   453→  ctx: RunContext
+   454→): Promise<ResultFile[]> {
+   455→  const results: ResultFile[] = [];
+   456→  for (const input of inputs) {
+   457→    ctx.onProgress?.(`جارٍ ترقيم «${input.name}»…`);
+   458→    const doc = await loadPdfLib(await bytesOf(input));
+   459→    const total = doc.getPageCount();
+   460→    const hindi = (params.digits ?? "هندي") === "هندي";
+   461→    const fmt = params.format ?? "رقم فقط";
+   462→    for (let i = 1; i <= total; i++) {
+   463→      const shown = hindi ? toHindiDigits(i) : String(i);
+   464→      const text = fmt === "صفحة من" ? `صفحة ${shown} من ${hindi ? toHindiDigits(total) : total}` : shown;
+   465→      const { bytes: png, w, h } = await arabicTextPng(text, { size: 60, color: "#1b2438" });
+   466→      const img = await doc.embedPng(png);
+   467→      const page = doc.getPage(i - 1);
+   468→      const targetH = 22;
+   469→      const targetW = (w / h) * targetH;
+   470→      page.drawImage(img, {
+   471→        x: (page.getWidth() - targetW) / 2,
+   472→        y: 16,
+   473→        width: targetW,
+   474→        height: targetH,
+   475→        opacity: 0.85,
+   476→      });
+   477→    }
+   478→    const saved = await doc.save({ useObjectStreams: true });
+   479→    results.push(resultFile(resultName("page_numbers", input.name), saved, label, "pdf"));
+   480→  }
+   481→  return results;
+   482→}
+   483→
+   484→/* صور إلى PDF */
+   485→async function opImagesToPdf(
+   486→  inputs: EngineInput[],
+   487→  params: Record<string, string>,
+   488→  label: string,
+   489→  ctx: RunContext
+   490→): Promise<ResultFile[]> {
+   491→  ctx.onProgress?.(`جارٍ تحويل ${inputs.length} صور إلى PDF…`);
+   492→  const out = await PDFDocument.create();
+   493→  for (const input of inputs) {
+   494→    const bytes = await bytesOf(input);
+   495→    const name = input.name.toLowerCase();
+   496→    let img;
+   497→    if (name.endsWith(".png")) img = await out.embedPng(bytes);
+   498→    else img = await out.embedJpg(bytes);
+   499→    if ((params.layout ?? "ملائم تلقائي") === "A4") {
+   500→      const page = out.addPage([595.28, 841.89]);
+   501→      const margin = 28;
+   502→      const maxW = page.getWidth() - margin * 2;
+   503→      const maxH = page.getHeight() - margin * 2;
+   504→      const scale = Math.min(maxW / img.width, maxH / img.height);
+   505→      page.drawImage(img, {
+   506→        x: (page.getWidth() - img.width * scale) / 2,
+   507→        y: (page.getHeight() - img.height * scale) / 2,
+   508→        width: img.width * scale,
+   509→        height: img.height * scale,
+   510→      });
+   511→    } else {
+   512→      const page = out.addPage([img.width, img.height]);
+   513→      page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+   514→    }
+   515→  }
+   516→  const saved = await out.save({ useObjectStreams: true });
+   517→  return [resultFile(resultName("images_to_pdf", inputs[0].name), saved, label, "pdf")];
+   518→}
+   519→
+   520→/* PDF إلى صور */
+   521→async function opPdfToImages(
+   522→  inputs: EngineInput[],
+   523→  params: Record<string, string>,
+   524→  label: string,
+   525→  ctx: RunContext
+   526→): Promise<ResultFile[]> {
+   527→  const pdfjs = await getPdfjs();
+   528→  const format = params.format ?? "png";
+   529→  const scaleMap: Record<string, number> = { مضغوطة: 1.2, متوازنة: 2.0, عالية: 3.0 };
+   530→  const scale = scaleMap[params.quality ?? "متوازنة"] ?? 2.0;
+   531→  const results: ResultFile[] = [];
+   532→  for (const input of inputs) {
+   533→    const bytes = await bytesOf(input);
+   534→    const src = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+   535→    for (let i = 1; i <= src.numPages; i++) {
+   536→      ctx.onProgress?.(`تحويل الصفحة ${i} من ${src.numPages} إلى صورة…`);
+   537→      const page = await src.getPage(i);
+   538→      const viewport = page.getViewport({ scale });
+   539→      const canvas = document.createElement("canvas");
+   540→      canvas.width = Math.floor(viewport.width);
+   541→      canvas.height = Math.floor(viewport.height);
+   542→      const c2 = canvas.getContext("2d")!;
+   543→      c2.fillStyle = "#ffffff";
+   544→      c2.fillRect(0, 0, canvas.width, canvas.height);
+   545→      await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+   546→      const mime = format === "jpeg" ? "image/jpeg" : "image/png";
+   547→      const blob = await new Promise<Blob>((resolve, reject) =>
+   548→        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("تعذر إنشاء الصورة"))), mime, 0.9)
+   549→      );
+   550→      const ext = format === "jpeg" ? "jpg" : "png";
+   551→      results.push(resultFile(resultName("pdf_to_images", input.name, i - 1, "." + ext), blob, label, "image"));
+   552→    }
+   553→  }
+   554→  return results;
+   555→}
+   556→
+   557→/* استخراج النص */
+   558→async function opExtractText(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {
+   559→  const pdfjs = await getPdfjs();
+   560→  const results: ResultFile[] = [];
+   561→  for (const input of inputs) {
+   562→    ctx.onProgress?.(`جارٍ استخراج نصوص «${input.name}»…`);
+   563→    const bytes = await bytesOf(input);
+   564→    const src = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+   565→    const chunks: string[] = [];
+   566→    for (let i = 1; i <= src.numPages; i++) {
+   567→      const page = await src.getPage(i);
+   568→      const content = await page.getTextContent();
+   569→      const line = content.items
+   570→        .map((it) => ("str" in it ? it.str : ""))
+   571→        .join(" ")
+   572→        .replace(/\s+/g, " ")
+   573→        .trim();
+   574→      chunks.push(`── الصفحة ${toHindiDigits(i)} ──\n${line}`);
+   575→    }
+   576→    const text = chunks.join("\n\n");
+   577→    const blob = new Blob(["\ufeff" + text], { type: "text/plain;charset=utf-8" });
+   578→    results.push(resultFile(resultName("extract_text", input.name), blob, label, "other"));
+   579→  }
+   580→  return results;
+   581→}
+   582→
+   583→/* بيانات الملف */
+   584→async function opMetadata(
+   585→  inputs: EngineInput[],
+   586→  params: Record<string, string>,
+   587→  label: string,
+   588→  ctx: RunContext
+   589→): Promise<ResultFile[]> {
+   590→  const results: ResultFile[] = [];
+   591→  for (const input of inputs) {
+   592→    ctx.onProgress?.(`جارٍ ضبط بيانات «${input.name}»…`);
+   593→    const doc = await loadPdfLib(await bytesOf(input));
+   594→    if (params.title) doc.setTitle(params.title);
+   595→    if (params.author) doc.setAuthor(params.author);
+   596→    doc.setModificationDate(new Date());
+   597→    doc.setProducer("محوّل PDF");
+   598→    const saved = await doc.save({ useObjectStreams: true });
+   599→    results.push(resultFile(resultName("metadata", input.name), saved, label, "pdf"));
+   600→  }
+   601→  return results;
+   602→}
+   603→
+   604→/* عدة صفحات في الورقة */
+   605→async function opNup(
+   606→  inputs: EngineInput[],
+   607→  params: Record<string, string>,
+   608→  label: string,
+   609→  ctx: RunContext
+   610→): Promise<ResultFile[]> {
+   611→  const results: ResultFile[] = [];
+   612→  for (const input of inputs) {
+   613→    ctx.onProgress?.(`جارٍ تجميع الصفحات في أوراق…`);
+   614→    const src = await loadPdfLib(await bytesOf(input));
+   615→    const out = await PDFDocument.create();
+   616→    const indices = src.getPageIndices();
+   617→    for (let i = 0; i < indices.length; i += 2) {
+   618→      const pair = indices.slice(i, i + 2);
+   619→      const embedded = await out.embedPdf(src, pair);
+   620→      const page = out.addPage([841.89, 595.28]); // A4 عرضي
+   621→      const slotW = page.getWidth() / 2 - 18;
+   622→      const slotH = page.getHeight() - 24;
+   623→      embedded.forEach((emb, j) => {
+   624→        const scale = Math.min(slotW / emb.width, slotH / emb.height);
+   625→        const w = emb.width * scale;
+   626→        const h = emb.height * scale;
+   627→        const x = j === 0 ? page.getWidth() - 12 - w : 12; // RTL: الأولى يمين
+   628→        page.drawPage(emb, { x, y: (page.getHeight() - h) / 2, width: w, height: h });
+   629→      });
+   630→    }
+   631→    const saved = await out.save({ useObjectStreams: true });
+   632→    results.push(resultFile(resultName("nup", input.name), saved, label, "pdf"));
+   633→  }
+   634→  return results;
+   635→}
+   636→
+   637→/* ─────────── الفحص والمصغّرات ─────────── */
+   638→
+   639→export interface InspectInfo {
+   640→  pages: number;
+   641→  thumb?: string;
+   642→  scanned: boolean;
+   643→}
+   644→
+   645→/** فحص PDF سريع: عدد الصفحات + مصغّرة + هل هو ممسوح ضوئيًا */
+   646→export async function inspectPdf(file: File): Promise<InspectInfo> {
+   647→  const pdfjs = await getPdfjs();
+   648→  const bytes = new Uint8Array(await file.arrayBuffer());
+   649→  const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+   650→  const pages = doc.numPages;
+   651→
+   652→  // مصغّرة الصفحة الأولى
+   653→  const page = await doc.getPage(1);
+   654→  const viewport = page.getViewport({ scale: 0.4 });
+   655→  const canvas = document.createElement("canvas");
+   656→  canvas.width = Math.floor(viewport.width);
+   657→  canvas.height = Math.floor(viewport.height);
+   658→  const c2 = canvas.getContext("2d")!;
+   659→  c2.fillStyle = "#ffffff";
+   660→  c2.fillRect(0, 0, canvas.width, canvas.height);
+   661→  await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+   662→  const thumb = canvas.toDataURL("image/png");
+   663→
+   664→  // كشف الممسوح: نص الصفحتين الأوليين
+   665→  let textLen = 0;
+   666→  for (let i = 1; i <= Math.min(2, pages); i++) {
+   667→    const p = await doc.getPage(i);
+   668→    const tc = await p.getTextContent();
+   669→    textLen += tc.items.reduce((acc, it) => acc + ("str" in it ? it.str.trim().length : 0), 0);
+   670→  }
+   671→  return { pages, thumb, scanned: textLen < 20 };
+   672→}
+   673→
+   674→/** مصغّرة صورة */
+   675→export async function inspectImage(file: File): Promise<{ thumb: string }> {
+   676→  return new Promise((resolve) => {
+   677→    const url = URL.createObjectURL(file);
+   678→    const img = new Image();
+   679→    img.onload = () => {
+   680→      const canvas = document.createElement("canvas");
+   681→      const scale = Math.min(1, 220 / img.width);
+   682→      canvas.width = Math.floor(img.width * scale);
+   683→      canvas.height = Math.floor(img.height * scale);
+   684→      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+   685→      URL.revokeObjectURL(url);
+   686→      resolve({ thumb: canvas.toDataURL("image/png") });
+   687→    };
+   688→    img.onerror = () => {
+   689→      URL.revokeObjectURL(url);
+   690→      resolve({ thumb: "" });
+   691→    };
+   692→    img.src = url;
+   693→  });
+   694→}
+   695→
+   696→/** مصغّرات كل صفحات PDF — للاختيار البصري */
+   697→export async function pdfPageThumbs(file: File, maxPages = 60): Promise<string[]> {
+   698→  const pdfjs = await getPdfjs();
+   699→  const bytes = new Uint8Array(await file.arrayBuffer());
+   700→  const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+   701→  const thumbs: string[] = [];
+   702→  const n = Math.min(doc.numPages, maxPages);
+   703→  for (let i = 1; i <= n; i++) {
+   704→    const page = await doc.getPage(i);
+   705→    const viewport = page.getViewport({ scale: 0.32 });
+   706→    const canvas = document.createElement("canvas");
+   707→    canvas.width = Math.floor(viewport.width);
+   708→    canvas.height = Math.floor(viewport.height);
+   709→    const c2 = canvas.getContext("2d")!;
+   710→    c2.fillStyle = "#ffffff";
+   711→    c2.fillRect(0, 0, canvas.width, canvas.height);
+   712→    await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+   713→    thumbs.push(canvas.toDataURL("image/png"));
+   714→  }
+   715→  return thumbs;
+   716→}
+   717→
+   718→/** إنشاء ZIP من النتائج */
+   719→export async function zipResults(files: ResultFile[]): Promise<Blob> {
+   720→  const JSZip = (await import("jszip")).default;
+   721→  const zip = new JSZip();
+   722→  const used = new Set<string>();
+   723→  for (const f of files) {
+   724→    let name = f.name;
+   725→    let k = 2;
+   726→    while (used.has(name)) {
+   727→      name = f.name.replace(/(\.[^.]+)$/, `-${k}$1`);
+   728→      k++;
+   729→    }
+   730→    used.add(name);
+   731→    zip.file(name, f.blob);
+   732→  }
+   733→  return zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+   734→}
+   735→
+   736→/** تنزيل ملف */
+   737→export function downloadBlob(blob: Blob, name: string): boolean {
+   738→  const url = URL.createObjectURL(blob);
+   739→  const a = document.createElement("a");
+   740→  a.href = url;
+   741→  a.download = name;
+   742→  a.rel = "noopener";
+   743→  document.body.appendChild(a);
+   744→  a.click();
+   745→  a.remove();
+   746→  // مهلة أطول حتى يبقى الرابط صالحًا إن احتاج المستخدم فتحه من تبويب مستقل
+   747→  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+   748→  return isEmbedded();
+   749→}
+   750→
+   751→/** هل نعمل داخل إطار مضمّن (معاينة داخل تطبيق آخر)؟ — التنزيل قد يكون محجوبًا هناك */
+   752→export function isEmbedded(): boolean {
+   753→  try {
+   754→    return window.self !== window.top;
+   755→  } catch {
+   756→    return true; // منع الوصول عبر الحدود = إطار مضمّن من أصل مختلف
+   757→  }
+   758→}
+   759→
+   760→/** فتح مخرج في تبويب مستقل — بديل موثوق حين تمنع المعاينة التنزيل المباشر */
+   761→export function openBlobInNewTab(blob: Blob): void {
+   762→  const url = URL.createObjectURL(blob);
+   763→  const w = window.open(url, "_blank");
+   764→  if (!w) {
+   765→    // حاجب النوافذ منع الفتح — نترك الرابط حيًا مدة أطول ونجرب عبر رابط مخفي
+   766→    const a = document.createElement("a");
+   767→    a.href = url;
+   768→    a.target = "_blank";
+   769→    a.rel = "noopener";
+   770→    document.body.appendChild(a);
+   771→    a.click();
+   772→    a.remove();
+   773→  }
+   774→  setTimeout(() => URL.revokeObjectURL(url), 120_000);
+   775→}
+   776→
