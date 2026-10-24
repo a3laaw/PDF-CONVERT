@@ -7,6 +7,13 @@
    لأننا نرسم فوق بكسلاتها مباشرة */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  drawRealEdits,
+  pageTextItems,
+  type PageInfo,
+  type RealMaskNorm,
+  type RealTextNorm,
+} from "@/lib/pdf-engine";
 import { toHindiDigits } from "@/lib/arabic";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -33,6 +40,7 @@ type ToolId =
   | "arrow"
   | "rect"
   | "ellipse"
+  | "mask"
   | "text";
 
 interface BaseAnno {
@@ -53,6 +61,13 @@ interface ShapeAnno extends BaseAnno {
   x2: number;
   y2: number;
 }
+interface MaskAnno extends BaseAnno {
+  tool: "mask";
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
 interface TextAnno extends BaseAnno {
   tool: "text";
   x: number;
@@ -60,8 +75,21 @@ interface TextAnno extends BaseAnno {
   /** حجم الخط بوحدة ‰ من ارتفاع الصفحة */
   size: number;
   text: string;
+  /** نص PDF حقيقي: يُكتب بخط مضمّن بحجمه الأصلي بالنقاط — لا صورة */
+  real?: { sizePt: number };
 }
-type Anno = StrokeAnno | ShapeAnno | TextAnno;
+type Anno = StrokeAnno | ShapeAnno | MaskAnno | TextAnno;
+
+interface TypingBox {
+  id: number;
+  x: number;
+  y: number;
+  value: string;
+  /** الحجم بالنقاط — للنص الحقيقي في PDF */
+  sizePt?: number;
+  /** هل الحجم مأخوذ من النص المجاور؟ */
+  snap?: boolean;
+}
 
 interface EditorDoc {
   annos: Record<number, Anno[]>;
@@ -90,6 +118,12 @@ const TEXT_SIZES = [
   { v: 52, label: "كبير" },
 ];
 const HIGHLIGHT_COLOR = "#FDE047";
+/* ألوان الحجب: أبيض لخلفية نظيفة، أسود لحجب صارم، أصفر للتظليل اللافت */
+const MASK_COLORS = [
+  { v: "#FFFFFF", label: "أبيض" },
+  { v: "#111827", label: "أسود" },
+  { v: "#FDE047", label: "أصفر" },
+];
 
 const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -126,6 +160,12 @@ const TOOL_ICONS: Record<ToolId, React.ReactNode> = {
   arrow: svg(<path d="M5 19L19 5M19 5h-8M19 5v8" />),
   rect: svg(<rect x="4" y="6" width="16" height="12" rx="1" />),
   ellipse: svg(<ellipse cx="12" cy="12" rx="8" ry="6" />),
+  mask: svg(
+    <>
+      <rect x="4" y="6" width="16" height="12" rx="1" />
+      <path d="M4 12h16M4 15.5h16" opacity={0.55} />
+    </>
+  ),
   text: svg(<path d="M4 7V5h16v2M12 5v14M9 19h6" />),
 };
 const TOOL_LABEL: Record<ToolId, string> = {
@@ -136,6 +176,7 @@ const TOOL_LABEL: Record<ToolId, string> = {
   arrow: "سهم",
   rect: "مستطيل",
   ellipse: "دائرة",
+  mask: "حجب",
   text: "نص",
 };
 const TOOL_ORDER: ToolId[] = [
@@ -146,6 +187,7 @@ const TOOL_ORDER: ToolId[] = [
   "line",
   "rect",
   "ellipse",
+  "mask",
   "text",
 ];
 
@@ -156,7 +198,8 @@ function drawAnno(
   a: Anno,
   w: number,
   h: number,
-  fontFamily: string
+  fontFamily: string,
+  mode: "preview" | "raster" = "preview"
 ) {
   ctx.save();
   ctx.lineCap = "round";
@@ -207,13 +250,38 @@ function drawAnno(
     if (a.tool === "rect") ctx.rect(x, y, bw, bh);
     else ctx.ellipse(x + bw / 2, y + bh / 2, bw / 2, bh / 2, 0, 0, Math.PI * 2);
     ctx.stroke();
+  } else if (a.tool === "mask") {
+    /* الحجب يُرسم أصلًا كمستطيل pdf-lib عند الحفظ — التراكب النقطي يتجاهله */
+    if (mode === "raster") {
+      ctx.restore();
+      return;
+    }
+    const s = a as MaskAnno;
+    const x = Math.min(s.x0, s.x1) * w;
+    const y = Math.min(s.y0, s.y1) * h;
+    const bw = Math.abs(s.x1 - s.x0) * w;
+    const bh = Math.abs(s.y1 - s.y0) * h;
+    ctx.fillStyle = a.color;
+    ctx.fillRect(x, y, bw, bh);
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = "rgba(37,99,235,0.85)";
+    ctx.lineWidth = Math.max(1, h / 400);
+    ctx.strokeRect(x, y, bw, bh);
+    ctx.setLineDash([]);
   } else {
     const s = a as TextAnno;
+    if (s.real && mode === "raster") {
+      /* النص الحقيقي يُكتب أصلًا بخط مضمّن — التراكب النقطي يتجاهله */
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = a.color;
     ctx.direction = "rtl";
     ctx.textAlign = "right";
     ctx.textBaseline = "alphabetic";
-    ctx.font = `700 ${s.size * pm}px ${fontFamily}`;
+    ctx.font = s.real
+      ? `400 ${s.size * pm}px ${fontFamily}` /* نفس وزن الخط المضمّن */
+      : `700 ${s.size * pm}px ${fontFamily}`;
     ctx.fillText(s.text, s.x * w, s.y * h);
   }
   ctx.restore();
@@ -238,6 +306,15 @@ function annoBox(a: Anno, w: number, h: number, fam: string): Box {
       y0: Math.min(...ys) - pad,
       x1: Math.max(...xs) + pad,
       y1: Math.max(...ys) + pad,
+    };
+  }
+  if (a.tool === "mask") {
+    const s = a as MaskAnno;
+    return {
+      x0: Math.min(s.x0, s.x1) - pad,
+      y0: Math.min(s.y0, s.y1) - pad,
+      x1: Math.max(s.x0, s.x1) + pad,
+      y1: Math.max(s.y0, s.y1) + pad,
     };
   }
   if (a.tool === "text") {
@@ -266,6 +343,10 @@ function moveAnno(a: Anno, dx: number, dy: number): Anno {
   if (a.tool === "pen" || a.tool === "highlight")
     return { ...a, pts: a.pts.map(([px, py]) => [px + dx, py + dy]) };
   if (a.tool === "text") return { ...a, x: a.x + dx, y: a.y + dy };
+  if (a.tool === "mask") {
+    const m = a as MaskAnno;
+    return { ...m, x0: m.x0 + dx, y0: m.y0 + dy, x1: m.x1 + dx, y1: m.y1 + dy };
+  }
   const s = a as ShapeAnno;
   return { ...s, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy };
 }
@@ -302,12 +383,20 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
   const [color, setColor] = useState(COLORS[0].v);
   const [size, setSize] = useState(3.5);
   const [textSize, setTextSize] = useState(36);
+  /* الحجب: لون القناع + حجم النص الحقيقي بالنقاط (يُقرأ من النص المجاور عند النقر) */
+  const [maskColor, setMaskColor] = useState(MASK_COLORS[0].v);
+  const [sizePt, setSizePt] = useState(14);
+  /* أبعاد الصفحة الحالية بوحدات PDF — لتحويل ‰ ↔ نقاط */
+  const pageDims = useRef<{ w: number; h: number }>({ w: 595, h: 842 });
+  /* عناصر نص الصفحة الحالية — أساس مطابقة الحجم والحجب بالنقر (undefined = تحميل، فارغة = بلا نص) */
+  const [pageInfo, setPageInfo] = useState<PageInfo | null | undefined>(undefined);
+  const itemsCache = useRef<Map<number, PageInfo>>(new Map());
   const [doc, setDoc] = useState<EditorDoc>({ annos: {}, past: [], future: [] });
   const [busy, setBusy] = useState<string>("");
-  const [typing, setTypingState] = useState<{ id: number; x: number; y: number; value: string } | null>(null);
-  const typingRef = useRef<{ id: number; x: number; y: number; value: string } | null>(null);
+  const [typing, setTypingState] = useState<TypingBox | null>(null);
+  const typingRef = useRef<TypingBox | null>(null);
   const typingSeq = useRef(0);
-  const setTyping = (t: { id: number; x: number; y: number; value: string } | null) => {
+  const setTyping = (t: TypingBox | null) => {
     typingRef.current = t;
     setTypingState(t);
   };
@@ -342,6 +431,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
         await img.decode().catch(() => undefined);
         if (!alive) return;
         const scale = Math.min(2, (maxCssW * 2) / img.naturalWidth);
+        pageDims.current = { w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
         const c = document.createElement("canvas");
         c.width = Math.round(img.naturalWidth * scale);
         c.height = Math.round(img.naturalHeight * scale);
@@ -359,6 +449,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
         const pdoc = await pdfjs.getDocument({ data: bytes }).promise;
         const p = await pdoc.getPage(Math.min(Math.max(1, page), pdoc.numPages));
         const v1 = p.getViewport({ scale: 1 });
+        pageDims.current = { w: v1.width, h: v1.height };
         const targetW = Math.max(1000, Math.min(1800, Math.round(maxCssW * 2)));
         const viewport = p.getViewport({ scale: targetW / v1.width });
         const c = document.createElement("canvas");
@@ -385,6 +476,30 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     if (typeof document !== "undefined" && "fonts" in document)
       document.fonts.ready.then(() => setZoom((z) => z)).catch(() => undefined);
   }, []);
+
+  /* عناصر نص الصفحة — تُحمّل عند اختيار أدوات النص/الحجب (أساس مطابقة الحجم والحجب بالنقر) */
+  useEffect(() => {
+    if (kind !== "pdf" || (tool !== "text" && tool !== "mask") || !file) return;
+    const cached = itemsCache.current.get(page);
+    if (cached) {
+      setPageInfo(cached);
+      return;
+    }
+    let alive = true;
+    setPageInfo(undefined);
+    pageTextItems(file, page)
+      .then((info) => {
+        itemsCache.current.set(page, info);
+        if (alive) setPageInfo(info);
+      })
+      .catch(() => {
+        if (alive)
+          setPageInfo({ items: [], w: pageDims.current.w, h: pageDims.current.h });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [kind, tool, page, file]);
 
   /* ── إعادة رسم الطبقة التفاعلية ── */
   const repaint = useCallback(() => {
@@ -441,6 +556,34 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     ];
   };
 
+  /* نقرة → إحداثيات PDF الحقيقية */
+  const pdfAt = (nx: number, ny: number): [number, number] => [
+    nx * pageDims.current.w,
+    (1 - ny) * pageDims.current.h,
+  ];
+
+  /* العنصر النصي تحت النقرة (بهامش) — الأقرب لوسط السطر */
+  const hitTextItem = (nx: number, ny: number, padPt = 6) => {
+    if (!pageInfo) return null;
+    const [px, py] = pdfAt(nx, ny);
+    let best: PageInfo["items"][number] | null = null;
+    let bestD = Infinity;
+    for (const it of pageInfo.items) {
+      if (!it.str.trim()) continue;
+      const x0 = it.x - padPt;
+      const x1 = it.x + it.w + padPt;
+      const y0 = it.y - it.sizePt * 0.35;
+      const y1 = it.y + it.sizePt * 1.15;
+      if (px < x0 || px > x1 || py < y0 || py > y1) continue;
+      const d = Math.abs(py - (it.y + it.sizePt * 0.4));
+      if (d < bestD) {
+        bestD = d;
+        best = it;
+      }
+    }
+    return best;
+  };
+
   const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (typing) return;
     const [x, y] = norm(e);
@@ -462,7 +605,11 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
         drag.current = { id: hit.id, orig: hit, sx: x, sy: y };
         /* نقفل التاريخ قبل أول تحرك — الحركة كلها خطوة تراجع واحدة */
         setDoc((d) => ({ ...d, past: [...d.past.slice(-40), d.annos], future: [] }));
-        e.currentTarget.setPointerCapture(e.pointerId);
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          /* مؤشر غير فعّال (اصطناعي/منفصل) — الرسم يعمل بدونه */
+        }
       }
       return;
     }
@@ -471,13 +618,43 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       /* نثبّت أي حقل مفتوح أولًا حتى لا يضيع نصه */
       if (typingRef.current) commitText(typingRef.current.id);
       const tid = ++typingSeq.current;
-      setTyping({ id: tid, x, y, value: "" });
+      /* مطابقة الحجم: نقرأ حجم النص المجاور وأساس سطره من بيانات الصفحة الحقيقية */
+      const near = kind === "pdf" ? hitTextItem(x, y, 10) : null;
+      if (near) {
+        const pt = Math.round(near.sizePt * 10) / 10;
+        setSizePt(pt);
+        setTyping({
+          id: tid,
+          x,
+          y: Math.min(1, Math.max(0, 1 - near.y / pageDims.current.h)),
+          value: "",
+          sizePt: pt,
+          snap: true,
+        });
+      } else {
+        setTyping({ id: tid, x, y, value: "", sizePt });
+      }
       /* منع الافتراضي: mousedown كان سيسرق التركيز فيمحو الحقل فور ظهوره */
       e.preventDefault();
       return;
     }
+    if (tool === "mask") {
+      setSelectedId(null);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* مؤشر غير فعّال — الرسم يعمل بدونه */
+      }
+      drawing.current = { id: uid(), tool: "mask", color: maskColor, width: 0, x0: x, y0: y, x1: x, y1: y };
+      repaint();
+      return;
+    }
     setSelectedId(null);
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* مؤشر غير فعّال — الرسم يعمل بدونه */
+    }
     if (tool === "pen" || tool === "highlight") {
       drawing.current = { id: uid(), tool, color, width: size, pts: [[x, y]] };
     } else {
@@ -522,6 +699,43 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     const d = drawing.current;
     drawing.current = null;
     if (!d) return;
+    if (d.tool === "mask") {
+      const m = d as MaskAnno;
+      const tiny = Math.abs(m.x1 - m.x0) < 0.006 && Math.abs(m.y1 - m.y0) < 0.006;
+      if (tiny) {
+        /* نقرة على نص → حجب تلقائي بحدود السطر نفسه */
+        const it = hitTextItem(m.x1, m.y1, 4);
+        if (it) {
+          const padPt = it.sizePt * 0.22;
+          const W = pageDims.current.w;
+          const H = pageDims.current.h;
+          const txt = it.str.trim();
+          commit([
+            ...curList,
+            {
+              id: m.id,
+              tool: "mask",
+              color: maskColor,
+              width: 0,
+              x0: Math.max(0, (it.x - padPt) / W),
+              y0: Math.max(0, 1 - (it.y + it.sizePt * 1.2 + padPt) / H),
+              x1: Math.min(1, (it.x + it.w + padPt) / W),
+              y1: Math.min(1, 1 - (it.y - padPt * 0.6) / H),
+            },
+          ]);
+          toast.success(
+            `اتحجب: «${txt.slice(0, 24)}${txt.length > 24 ? "…" : ""}»`
+          );
+        } else {
+          toast.info("مرّر فوق النص لتحجبه — النقرة وحدها تحجب السطر الذي تنقره");
+        }
+        repaint();
+        return;
+      }
+      commit([...curList, m]);
+      repaint();
+      return;
+    }
     const t = d as StrokeAnno | ShapeAnno;
     const tiny =
       "pts" in t
@@ -536,6 +750,10 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     if (!t || t.id !== id) return; /* حقل قديم — سبقه نقرة جديدة */
     typingRef.current = null;
     if (t.value.trim()) {
+      const pt = t.sizePt ?? sizePt;
+      /* للـPDF: نص حقيقي بحجم النقاط الأصلي — ‰ للمعاينة تُشتق من أبعاد الصفحة
+         للصورة: كما كان — حجم نسبي يُطبع في الـPNG */
+      const isPdf = kind === "pdf";
       commit([
         ...curList,
         {
@@ -545,8 +763,9 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           width: size,
           x: t.x,
           y: t.y,
-          size: textSize,
+          size: isPdf ? (pt / pageDims.current.h) * 1000 : textSize,
           text: t.value.trim(),
+          real: isPdf ? { sizePt: pt } : undefined,
         },
       ]);
     }
@@ -587,34 +806,71 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     setBusy("جارٍ الحفظ…");
     try {
       if (kind === "pdf") {
-        const { PDFDocument } = await import("pdf-lib");
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        const pdfjs = await import("pdfjs-dist");
-        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-        const jdoc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
-        const out = await PDFDocument.load(bytes.slice(), {
-          ignoreEncryption: true,
-          updateMetadata: false,
-        });
-        const fam = getFam();
+        let bytes = new Uint8Array(await file.arrayBuffer()) as Uint8Array;
+        /* التمريرة الحقيقية أولًا: أقنعة الحجب + نصوص بخط مضمّن (عربي مُشكّل قابل للتحديد) */
+        const masks: RealMaskNorm[] = [];
+        const texts: RealTextNorm[] = [];
+        const rasterPages: number[] = [];
         for (const pg of touched) {
-          const p = await jdoc.getPage(pg);
-          const v1 = p.getViewport({ scale: 1 });
-          const targetW = Math.min(2400, Math.max(1400, Math.round(v1.width * 2.2)));
-          const viewport = p.getViewport({ scale: targetW / v1.width });
-          const c = document.createElement("canvas");
-          c.width = Math.floor(viewport.width);
-          c.height = Math.floor(viewport.height);
-          const ctx = c.getContext("2d")!;
-          for (const a of doc.annos[pg] ?? []) drawAnno(ctx, a, c.width, c.height, fam);
-          const pngBlob: Blob = await new Promise((res) => c.toBlob((b) => res(b!), "image/png"));
-          const img = await out.embedPng(await pngBlob.arrayBuffer());
-          const pgObj = out.getPage(pg - 1);
-          pgObj.drawImage(img, { x: 0, y: 0, width: pgObj.getWidth(), height: pgObj.getHeight() });
+          let hasRaster = false;
+          for (const a of doc.annos[pg] ?? []) {
+            if (a.tool === "mask") {
+              const m = a as MaskAnno;
+              masks.push({
+                page: pg,
+                x0: Math.min(m.x0, m.x1),
+                y0: Math.min(m.y0, m.y1),
+                x1: Math.max(m.x0, m.x1),
+                y1: Math.max(m.y0, m.y1),
+                color: m.color,
+              });
+            } else if (a.tool === "text" && (a as TextAnno).real) {
+              const s = a as TextAnno;
+              texts.push({
+                page: pg,
+                x: s.x,
+                y: s.y,
+                sizePt: s.real!.sizePt,
+                text: s.text,
+                color: s.color,
+              });
+            } else hasRaster = true;
+          }
+          if (hasRaster) rasterPages.push(pg);
         }
-        (jdoc as unknown as { destroy?: () => void }).destroy?.();
-        const outBytes = await out.save();
-        const pdfBlob = new Blob([outBytes as unknown as BlobPart], { type: "application/pdf" });
+        if (masks.length || texts.length)
+          bytes = await drawRealEdits(bytes, masks, texts);
+        /* التراكب النقطي لما لا يُرسم أصلًا (قلم/أشكال/تظليل) — كما كان تمامًا */
+        if (rasterPages.length) {
+          const { PDFDocument } = await import("pdf-lib");
+          const pdfjs = await import("pdfjs-dist");
+          pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+          const jdoc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+          const out = await PDFDocument.load(bytes.slice(), {
+            ignoreEncryption: true,
+            updateMetadata: false,
+          });
+          const fam = getFam();
+          for (const pg of rasterPages) {
+            const p = await jdoc.getPage(pg);
+            const v1 = p.getViewport({ scale: 1 });
+            const targetW = Math.min(2400, Math.max(1400, Math.round(v1.width * 2.2)));
+            const viewport = p.getViewport({ scale: targetW / v1.width });
+            const c = document.createElement("canvas");
+            c.width = Math.floor(viewport.width);
+            c.height = Math.floor(viewport.height);
+            const ctx = c.getContext("2d")!;
+            for (const a of doc.annos[pg] ?? [])
+              drawAnno(ctx, a, c.width, c.height, fam, "raster");
+            const pngBlob: Blob = await new Promise((res) => c.toBlob((b) => res(b!), "image/png"));
+            const img = await out.embedPng(await pngBlob.arrayBuffer());
+            const pgObj = out.getPage(pg - 1);
+            pgObj.drawImage(img, { x: 0, y: 0, width: pgObj.getWidth(), height: pgObj.getHeight() });
+          }
+          (jdoc as unknown as { destroy?: () => void }).destroy?.();
+          bytes = await out.save();
+        }
+        const pdfBlob = new Blob([bytes as unknown as BlobPart], { type: "application/pdf" });
         onSave(`${fileName.replace(/\.pdf$/i, "")} (معدّل).pdf`, pdfBlob);
       } else {
         const base = baseRef.current!;
@@ -810,31 +1066,51 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           <span className="mx-1 hidden w-px bg-border md:block" aria-hidden />
           {/* السماكة / حجم النص */}
           <div className="flex items-center gap-1 max-md:pl-2 md:flex-col md:px-1">
-            {tool === "text"
-              ? TEXT_SIZES.map((s) => (
+            {tool === "mask"
+              ? MASK_COLORS.map((s) => (
                   <button
                     key={s.v}
-                    onClick={() => setTextSize(s.v)}
+                    onClick={() => setMaskColor(s.v)}
+                    aria-label={`قناع ${s.label}`}
+                    title={`قناع ${s.label}`}
                     className={cn(
-                      "shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold",
-                      textSize === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                      "flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-extrabold",
+                      maskColor === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
                     )}
                   >
+                    <span
+                      className="size-4 rounded border border-border"
+                      style={{ background: s.v }}
+                      aria-hidden
+                    />
                     {s.label}
                   </button>
                 ))
-              : SIZES.map((s) => (
-                  <button
-                    key={s.v}
-                    onClick={() => setSize(s.v)}
-                    className={cn(
-                      "shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold",
-                      size === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
-                    )}
-                  >
-                    {s.label}
-                  </button>
-                ))}
+              : tool === "text"
+                ? TEXT_SIZES.map((s) => (
+                    <button
+                      key={s.v}
+                      onClick={() => setTextSize(s.v)}
+                      className={cn(
+                        "shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold",
+                        textSize === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                      )}
+                    >
+                      {s.label}
+                    </button>
+                  ))
+                : SIZES.map((s) => (
+                    <button
+                      key={s.v}
+                      onClick={() => setSize(s.v)}
+                      className={cn(
+                        "shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold",
+                        size === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                      )}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
           </div>
           <span className="flex-1" aria-hidden />
           <button
@@ -917,7 +1193,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
               {/* إدخال النص */}
               {typing && (
                 <div
-                  className="absolute z-10"
+                  className="absolute z-10 flex flex-col gap-1"
                   style={{
                     left: `${typing.x * 100}%`,
                     top: `${typing.y * 100}%`,
@@ -935,9 +1211,40 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
                     }}
                     onBlur={() => commitText(typing.id)}
                     placeholder="اكتب ثم Enter"
-                    style={{ color, fontSize: `${Math.max(14, textSize * zoom * 0.35)}px` }}
+                    style={{
+                      color,
+                      fontSize: `${Math.max(
+                        13,
+                        kind === "pdf"
+                          ? (typing.sizePt ?? sizePt) * (pageW / pageDims.current.w)
+                          : textSize * zoom * 0.35
+                      )}px`,
+                    }}
                     className="rounded-lg border-2 border-primary/50 bg-white/95 px-2 py-1 font-bold shadow-lg outline-none"
                   />
+                  {kind === "pdf" && (
+                    <span className="flex w-fit items-center gap-1 rounded-lg border border-border bg-white/95 px-2 py-0.5 text-[10px] font-extrabold text-muted-foreground shadow">
+                      {typing.snap ? "حجم النص هنا" : "حجم الخط"}
+                      <input
+                        type="number"
+                        min={4}
+                        max={96}
+                        step={0.5}
+                        value={typing.sizePt ?? sizePt}
+                        onChange={(e) =>
+                          setTyping({
+                            ...typing,
+                            sizePt: Math.max(4, Math.min(96, Number(e.target.value) || 14)),
+                          })
+                        }
+                        aria-label="حجم الخط بالنقاط"
+                        className="w-11 rounded border border-border px-1 text-center text-[11px] font-extrabold text-foreground outline-none"
+                      />
+                      pt
+                      <span aria-hidden>·</span>
+                      Tajawal
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -949,7 +1256,9 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
 
       {/* ══ شريط التلميح السفلي ══ */}
       <div className="flex h-8 shrink-0 items-center justify-center gap-3 border-t border-border bg-white px-3 text-[10px] text-muted-foreground">
-        <span>التعديلات تُطبع فوق الصفحة كما تراها تمامًا — الصفحات الأخرى تبقى كما هي</span>
+        <span>
+          أداة «نص» تكتب نصًا حقيقيًا بحجم النص المجاور · «حجب» تغطي أي سطر بنقرة · البقية تُطبع كما تراها
+        </span>
         <span className="hidden sm:inline">·</span>
         <span className="hidden sm:inline">تراجع Ctrl+Z · إعادة Ctrl+Y · حذف المحدد Delete</span>
       </div>

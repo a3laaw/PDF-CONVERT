@@ -855,3 +855,218 @@ export function openBlobInNewTab(blob: Blob): void {
   }
   setTimeout(() => URL.revokeObjectURL(url), 120_000);
 }
+
+/* ─────────── ترقية التعديل: نص PDF حقيقي + حجب آمن ───────────
+   النص المكتوب يُضمَّن بخط Tajawal كنص PDF أصلي (عربي مُشكَّل، قابل للتحديد والنسخ)
+   والحجم يُقرأ 100% من بيانات النص المجاور — والحجب مستطيل معتم يخفي أي سطر بنقرة */
+
+/** عنصر نصي بإحداثيات PDF الحقيقية (أساس السطر، y من أسفل الصفحة) */
+export interface PdfTextItem {
+  str: string;
+  x: number;
+  y: number;
+  w: number;
+  sizePt: number;
+}
+
+/** عناصر نص الصفحة + أبعادها بوحدات PDF */
+export interface PageInfo {
+  items: PdfTextItem[];
+  w: number;
+  h: number;
+}
+
+/** قراءة عناصر النص بإحداثياتها وأحجامها الحقيقية — أساس مطابقة الحجم */
+export async function pageTextItems(file: File, pageNo: number): Promise<PageInfo> {
+  const pdfjs = await getPdfjs();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const doc = await pdfjs.getDocument({ data: bytes }).promise;
+  const page = await doc.getPage(Math.max(1, pageNo));
+  const v1 = page.getViewport({ scale: 1 });
+  const tc = await page.getTextContent();
+  const items: PdfTextItem[] = [];
+  for (const it of tc.items as unknown as {
+    str: string;
+    transform: number[];
+    width: number;
+  }[]) {
+    if (!it.str || !it.str.trim()) continue;
+    const t = it.transform;
+    const sizePt = Math.hypot(t[2], t[3]) || Math.hypot(t[0], t[1]) || 12;
+    items.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, sizePt });
+  }
+  (doc as unknown as { destroy?: () => void }).destroy?.();
+  return { items, w: v1.width, h: v1.height };
+}
+
+/** قناع حجب بإحداثيات طبيعية (y من الأعلى 0..1) — يُحوَّل لمستطيل PDF داخليًا */
+export interface RealMaskNorm {
+  page: number; // 1-based
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  color: string; // hex
+}
+
+/** نص حقيقي بإحداثيات طبيعية: x ثبات اليمين، y أساس السطر (من الأعلى 0..1) */
+export interface RealTextNorm {
+  page: number;
+  x: number;
+  y: number;
+  sizePt: number;
+  text: string;
+  color: string; // hex
+}
+
+let tajawalCache: Uint8Array | null = null;
+async function getTajawal(): Promise<Uint8Array> {
+  if (!tajawalCache) {
+    const res = await fetch("/fonts/Tajawal-Regular.ttf");
+    if (!res.ok) throw new Error("تعذّر تحميل خط الكتابة");
+    tajawalCache = new Uint8Array(await res.arrayBuffer());
+  }
+  return tajawalCache.slice();
+}
+
+function hexToRgb01(hex: string): [number, number, number] {
+  const m = hex.replace("#", "");
+  const v = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
+  const n = parseInt(v, 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+/* ── تخطيط bidi مبسّط: fontkit يعكس كامل السطر للـRTL فيكسر ترتيب الأرقام اللاتينية —
+   الحل: نجزّئ السطر إلى جُمل (عربي / لاتيني-أرقام / محايد) ونرسم كل جملة بموضعها:
+   العربية تُشكّل وتُعكس داخل جملتها فقط، والأرقام تُرسم LTR كما هي، والتدفق من اليمين لليسار */
+const RTL_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const LTR_RE = /[A-Za-z0-9\u00C0-\u024F\u0370-\u03FF]/;
+
+function charKind(ch: string): "rtl" | "ltr" | "n" {
+  if (RTL_RE.test(ch)) return "rtl";
+  if (LTR_RE.test(ch)) return "ltr";
+  return "n";
+}
+
+function runsOf(text: string): { t: string; k: "rtl" | "ltr" | "n" }[] {
+  const raw: { t: string; k: "rtl" | "ltr" | "n" }[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const k = charKind(text[i]);
+    let j = i + 1;
+    while (j < text.length && charKind(text[j]) === k) j++;
+    raw.push({ t: text.slice(i, j), k });
+    i = j;
+  }
+  /* المحايدات تنصهر بالجارتين المتشابهتين — وإلا تبقى جملة محايدة مستقلة */
+  const merged: { t: string; k: "rtl" | "ltr" | "n" }[] = [];
+  for (let idx = 0; idx < raw.length; idx++) {
+    const r = raw[idx];
+    if (r.k === "n") {
+      const prev = merged[merged.length - 1];
+      const next = raw[idx + 1];
+      if (prev && next && prev.k === next.k && prev.k !== "n") {
+        prev.t += r.t;
+        continue;
+      }
+    }
+    merged.push(r);
+  }
+  return merged;
+}
+
+/** رسم نص مختلط (عربي + أرقام/لاتيني) مثبّت من اليمين — بنفس ترتيب bidi في معاينة المتصفح */
+function drawBidiRight(
+  pg: import("pdf-lib").PDFPage,
+  font: import("pdf-lib").PDFFont,
+  text: string,
+  size: number,
+  rightX: number,
+  y: number,
+  color: ReturnType<typeof rgb>,
+  W: number
+) {
+  const hasRtl = [...text].some((ch) => charKind(ch) === "rtl");
+  if (!hasRtl) {
+    /* لاتيني خالص: لا انعكاس — يُرسم ككتلة واحدة مثبّتة من اليمين */
+    const w = font.widthOfTextAtSize(text, size);
+    pg.drawText(text, { x: Math.max(2, rightX - w), y, size, font, color });
+    return;
+  }
+  const runs = runsOf(text);
+  const widths = runs.map((r) => font.widthOfTextAtSize(r.t, size));
+  const total = widths.reduce((a, b) => a + b, 0);
+  let cursor = Math.min(W - 2, rightX); /* حافة اليمين */
+  if (cursor - total < 2) cursor = total + 2; /* نزح الكتلة كلها لتبقى داخل الصفحة */
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i];
+    const w = widths[i];
+    if (r.k !== "n" || r.t.trim()) {
+      pg.drawText(r.t, { x: cursor - w, y, size, font, color });
+    }
+    cursor -= w;
+  }
+}
+
+/** التمريرة الحقيقية: أقنعة الحجب أولًا ثم النصوص فوقها —
+ *  فيعمل «الكتابة فوق نص محجوب» في حفظ واحد. الأقنعة والنصوص تُرسم أصلًا في الـPDF */
+export async function drawRealEdits(
+  pdfBytes: Uint8Array,
+  masks: RealMaskNorm[],
+  texts: RealTextNorm[]
+): Promise<Uint8Array> {
+  if (masks.length === 0 && texts.length === 0) return pdfBytes;
+  const fontkitMod = await import("@pdf-lib/fontkit");
+  const fontkit = ((fontkitMod as unknown as { default?: unknown }).default ??
+    fontkitMod) as unknown as Parameters<PDFDocument["registerFontkit"]>[0];
+  const out = await loadPdfLib(pdfBytes.slice());
+  out.registerFontkit(fontkit);
+  const font = await out.embedFont(await getTajawal(), { subset: true });
+
+  /* تجميع حسب الصفحة مع حفظ ترتيب: أقنعة ثم نصوص */
+  const pages = new Map<number, { masks: RealMaskNorm[]; texts: RealTextNorm[] }>();
+  for (const m of masks) {
+    const e = pages.get(m.page) ?? { masks: [], texts: [] };
+    e.masks.push(m);
+    pages.set(m.page, e);
+  }
+  for (const t of texts) {
+    const e = pages.get(t.page) ?? { masks: [], texts: [] };
+    e.texts.push(t);
+    pages.set(t.page, e);
+  }
+
+  for (const [pageNo, e] of pages) {
+    const pg = out.getPage(pageNo - 1);
+    const W = pg.getWidth();
+    const H = pg.getHeight();
+    for (const m of e.masks) {
+      const [r, g, b] = hexToRgb01(m.color);
+      const x = Math.max(0, Math.min(W, m.x0 * W));
+      const x2 = Math.max(0, Math.min(W, m.x1 * W));
+      const yBottom = Math.max(0, Math.min(H, (1 - m.y1) * H));
+      const yTop = Math.max(0, Math.min(H, (1 - m.y0) * H));
+      pg.drawRectangle({
+        x,
+        y: yBottom,
+        width: Math.max(0.5, x2 - x),
+        height: Math.max(0.5, yTop - yBottom),
+        color: rgb(r, g, b),
+      });
+    }
+    for (const t of e.texts) {
+      const [r, g, b] = hexToRgb01(t.color);
+      drawBidiRight(
+        pg,
+        font,
+        t.text,
+        t.sizePt,
+        t.x * W, // مثبّت من اليمين مثل المعاينة تمامًا
+        Math.max(t.sizePt * 0.25, Math.min(H - 2, (1 - t.y) * H)),
+        rgb(r, g, b),
+        W
+      );
+    }
+  }
+  return out.save();
+}
