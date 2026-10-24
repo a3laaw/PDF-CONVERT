@@ -42,7 +42,7 @@ export function FilePanel() {
       if (good.length > 0) void addFiles(good);
       if (bad.length > 0) {
         toast.warning(`تم تجاهل ${bad.length} من الملفات`, {
-          description: "المدعوم حاليًا: PDF والصور — ملفات CAD تتطلب النسخة المكتبية",
+          description: "المدعوم حاليًا: PDF والصور فقط",
         });
       }
     },
@@ -83,7 +83,7 @@ export function FilePanel() {
         ref={inputRef}
         type="file"
         multiple
-        accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.dxf,.dwg,.rvt"
+        accept=".pdf,image/*"
         className="hidden"
         onChange={(e) => {
           onDrop(e.target.files);

@@ -1,24 +1,9 @@
 "use client";
 
-import { ArrowLeftRight, DraftingCompass, Building2, PenTool } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ArrowLeftRight } from "lucide-react";
 
-export type AppView = "home" | "cad-dwg" | "cad-rvt" | "cad-adobe";
-
-interface Props {
-  view: AppView;
-  onViewChange: (v: AppView) => void;
-}
-
-const TABS: { id: AppView; label: string; icon?: React.ReactNode }[] = [
-  { id: "home", label: "الأدوات" },
-  { id: "cad-dwg", label: "أوتوكاد", icon: <DraftingCompass className="size-4" aria-hidden /> },
-  { id: "cad-rvt", label: "ريفيت", icon: <Building2 className="size-4" aria-hidden /> },
-  { id: "cad-adobe", label: "أدوبي", icon: <PenTool className="size-4" aria-hidden /> },
-];
-
-/** شريط الأعلى: الاسم + أربعة استوديوهات (PDF / أوتوكاد / ريفيت / أدوبي) */
-export function HeaderBar({ view, onViewChange }: Props) {
+/** شريط الأعلى: الاسم + وصف مختصر — مساحة عمل واحدة لأدوات PDF والصور */
+export function HeaderBar() {
   return (
     <header className="sticky top-0 z-40 border-b border-border/70 bg-white/90 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
@@ -28,21 +13,9 @@ export function HeaderBar({ view, onViewChange }: Props) {
           </span>
           <span className="text-lg font-extrabold">محوّل PDF</span>
         </span>
-
-        <nav className="mr-auto flex items-center gap-1 overflow-x-auto" aria-label="التنقل الرئيسي">
-          {TABS.map((t) => (
-            <Button
-              key={t.id}
-              variant={view === t.id ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => onViewChange(t.id)}
-              className="gap-1.5 font-bold"
-            >
-              {t.icon}
-              {t.label}
-            </Button>
-          ))}
-        </nav>
+        <span className="mr-auto hidden text-xs font-bold text-muted-foreground sm:block">
+          أدوات PDF والصور — كل الشغل داخل متصفحك
+        </span>
       </div>
     </header>
   );

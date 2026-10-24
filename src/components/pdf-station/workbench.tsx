@@ -31,7 +31,6 @@ const svg = (paths: React.ReactNode) => (
 );
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
-  convert: svg(<path d="M4 7h13l-3-3M20 17H7l3 3" />),
   compress: svg(<path d="M4 9h16M4 15h10M9 4l-4 5 4 5" />),
   merge: svg(
     <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
@@ -89,8 +88,7 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   ),
 };
 
-const TOOLBAR: { id: OpId | "convert"; label: string }[] = [
-  { id: "convert", label: "تحويل" },
+const TOOLBAR: { id: OpId; label: string }[] = [
   { id: "compress", label: "تصغير" },
   { id: "merge", label: "دمج" },
   { id: "split", label: "فصل" },
@@ -138,11 +136,7 @@ function extLabel(name: string): string {
 
 /* ─────────── المكوّن ─────────── */
 
-export function Workbench({
-  onOpenStudio,
-}: {
-  onOpenStudio: (v: "cad-dwg" | "cad-rvt" | "cad-adobe") => void;
-}) {
+export function Workbench() {
   const files = useWorkspace((s) => s.files);
   const results = useWorkspace((s) => s.results);
   const runState = useWorkspace((s) => s.runState);
@@ -210,23 +204,7 @@ export function Workbench({
   }, [activeFile, page, previewKey]);
   const preview = previewState && previewState.key === previewKey ? previewState.url : "";
 
-  const pickTool = (id: OpId | "convert") => {
-    if (id === "convert") {
-      /* توجيه ذكي: حسب نوع الملف المحدد — نفس فكرة الاستوديوهات */
-      const probe =
-        activeFile ??
-        files.find((f) => effectiveSel.has(f.id)) ??
-        null;
-      const ext = probe ? (probe.name.split(".").pop() || "").toLowerCase() : "";
-      onOpenStudio(
-        ext === "rvt"
-          ? "cad-rvt"
-          : ext === "dxf" || ext === "dwg" || probe?.kind === "cad"
-            ? "cad-dwg"
-            : "cad-adobe"
-      );
-      return;
-    }
+  const pickTool = (id: OpId) => {
     setTool(id);
     const def: Record<string, string> = {};
     for (const f of TOOLS_BY_ID[id].fields) if (f.default !== undefined) def[f.key] = f.default;
@@ -288,7 +266,7 @@ export function Workbench({
     else if (activeFile?.kind === "image")
       toast.info("الأداة دي لملفات PDF — للصور استخدم «من صور»");
     else if (activeFile && activeFile.kind !== "pdf")
-      toast.info("النوع ده يُعرض ويتحول من استوديوهات أوتوكاد وريفيت وأدوبي في الأعلى");
+      toast.info("ندعم ملفات PDF والصور فقط حاليًا — أنواع أخرى غير مدعومة بعد");
     else toast.info("حدّد ملف PDF من قائمة الملفات أولًا");
   };
 
@@ -385,11 +363,11 @@ export function Workbench({
           {/* ─── شريط الأدوات ─── */}
           <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
             {TOOLBAR.map(({ id, label }) => {
-              const ok = id === "convert" || toolEnabled(id as OpId);
+              const ok = toolEnabled(id);
               return (
                 <button
                   key={id}
-                  onClick={() => (ok ? pickTool(id) : hintDisabled(id as OpId))}
+                  onClick={() => (ok ? pickTool(id) : hintDisabled(id))}
                   className={cn(
                     "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
                     tool === id
@@ -443,8 +421,17 @@ export function Workbench({
                     >
                       ✓
                     </button>
-                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-red-50 text-[9px] font-extrabold text-red-600">
-                      {f.kind === "image" ? "IMG" : "PDF"}
+                    <span
+                      className={cn(
+                        "grid size-8 shrink-0 place-items-center rounded-lg text-[9px] font-extrabold",
+                        f.kind === "pdf"
+                          ? "bg-red-50 text-red-600"
+                          : f.kind === "image"
+                            ? "bg-sky-50 text-sky-600"
+                            : "bg-amber-50 text-amber-600"
+                      )}
+                    >
+                      {f.kind === "image" ? "IMG" : f.kind === "pdf" ? "PDF" : "؟"}
                     </span>
                     <span className="min-w-0">
                       <span className="block max-w-[108px] truncate text-xs font-bold">{f.name}</span>
@@ -584,7 +571,7 @@ export function Workbench({
                 {activeFile?.kind === "image"
                   ? "الصور تتحول إلى PDF بأداة «من صور»"
                   : activeFile && activeFile.kind !== "pdf"
-                    ? "الأنواع الأخرى تُعرض وتتحول من الاستوديوهات في الأعلى"
+                    ? "هذا النوع غير مدعوم حاليًا — PDF والصور فقط"
                     : "اختر أداة من الشريط"}
               </span>
             )}

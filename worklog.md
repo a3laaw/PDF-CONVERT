@@ -276,3 +276,25 @@ Stage Summary:
 - 披露义务：LibreDWG GPLv3（独立进程调用），后续页脚披露表需加一行；ODA 仍是从 AutoCAD 端 100% 保真的金标准（LibreDWG 对复杂 DWG 可能部分实体缺失）。
 - 证据：scripts/t_out/e2e/{01_dwg_vector_preview,02_dwg_zoom200,03_dwg_result_dialog,04_mobile_dwg}.png；引擎测试 scripts/engine_test_dwg.py。
 - 用户文件 DR-UR.dwg 请其重新上传即可看到矢量预览（AC1032 版本已被真实样本覆盖）。
+
+---
+Task ID: 23
+Agent: main (Z.ai)
+Task: 用户决策「هنتخلي عن فكرة الاوتو كاد ونخلينا في pdf والصور والتعديل عليهما فقط الان」— 移除 AutoCAD/Revit/Adobe 三工作室与全部 CAD 入口，回归单一 PDF+图片工作区。
+
+Work Log:
+- 盘点：CAD 引用散布于 header-bar/page/workbench/cad-studio/convert-studio/command-palette/layout/convert-formats/file-panel/workspace(types)。
+- header-bar.tsx 重写：删除四标签导航与 AppView 类型 → 纯品牌头（محوّل PDF + 副标语 «أدوات PDF والصور — كل الشغل داخل متصفحك»），无 props。
+- page.tsx 重写：删除 view 状态与 CadStudio 分支 → 单一 Workbench；footer 恒为浏览器本地处理文案。
+- workbench.tsx：删除 onOpenStudio prop 与 pickTool 的 convert 智能路由；TOOLBAR 移除 «تحويل» 按钮（保留 «من صور»/«لصور» 两个图片转换工具）；TOOL_ICONS 移除 convert 键；hintDisabled 文案改 «ندعم ملفات PDF والصور فقط حاليًا»；工具条提示区同步改 «هذا النوع غير مدعوم حاليًا — PDF والصور فقط»；文件卡类型徽章修正（此前任何非图片类型都显示绿色 PDF chip）→ pdf=PDF(红)/image=IMG(蓝)/其他=؟(琥珀)。
+- file-panel.tsx：accept 从含 .dxf/.dwg/.rvt 收紧为 ".pdf,image/*"；拒绝 toast 描述改 «المدعوم حاليًا: PDF والصور فقط»。
+- layout.tsx：metadata 描述与 keywords 全部去 CAD 化，聚焦 PDF+图片（含 إزالة العلامة المائية/تعديل PDF 关键词）。
+- 删除文件：src/components/pdf-station/cad-studio.tsx、src/components/pdf-station/convert-studio.tsx（此前已无引用的死代码）、src/app/api/cad-preview/ 整目录。保留 scripts/convert_to_pdf.py 引擎层 CAD 能力与 LibreDWG 安装（未来若回头可快速复活）。
+- 保留 workspace.ts 的 cad 内容嗅探（内部无害，拖入 DWG 会显示 ؟ 徽章+诚实 toast，不再误导为 PDF）。
+- 浏览器 E2E（真实操作）：①首页无标签、干净单工作区（10_home_no_cad.png）；②上传 merged.pdf → تدوير → «جاهز — ١ ملف»（11）；③上传 chain-check.png → من صور → chain-check.pdf 生成+下载按钮（12）；④拖入 floor-plan.dwg → ？徽章 + 点 تدوير 弹 toast «ندعم ملفات PDF والصور فقط حاليًا»（13）；⑤移动端 390x844 上传 PDF 工具条正常换行可用（14/15）。
+- 校验：eslint 全绿；tsc src/ 零错误（仅 examples//skills/ 既有错误）；dev server 热更新正常。
+
+Stage Summary:
+- 站点正式收缩为「PDF + 图片」单一工作区：13 个工具（تصغير/دمج/فصل/استخراج/حذف/تدوير/ترتيب/ترقيم/ختم/بدون علامة/لصور/من صور/نص）+ nup/metadata 在目录中。
+- CAD 代码从 UI 与 API 层完全退场；引擎层保留以备未来快速回归。
+- 下一步方向（用户已点名 «التعديل عليهما»）：PDF/图片编辑层——P0 的预览编辑（Overlay Canvas+撤销）、水印图像检测器、OCR 阿语基准。
