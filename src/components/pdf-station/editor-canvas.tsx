@@ -1,19 +1,39 @@
 "use client";
 
-/* طبقة التعديل المباشر — رسم وتظليل وأشكال ونص عربي فوق صفحة PDF أو صورة
-   الفلسفة: ما تراه في المحرر هو ما يُحفظ بالضبط (Canvas → PNG يُطبع فوق الصفحة)
+/* محرّر بأسلوب كانفا — شاشة كاملة فوق الملف
+   الفلسفة: ما تراه في المحرر هو ما يُحفظ بالضبط (WYSIWYG)
    الإحداثيات والأحجام طبيعية نسبية للصفحة (0..1 والسماكة بأجزاء من الألف من الارتفاع)
-   → تُرسم بأي دقة بدون فقدان وبنفس المظهر */
+   → تُرسم بأي دقة بدون فقدان وبنفس المظهر، والملف الماسوح ضوئيًا يُعامل كصفحة عادية
+   لأننا نرسم فوق بكسلاتها مباشرة */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toHindiDigits } from "@/lib/arabic";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { X, Check, Undo2, Redo2, Trash2 } from "lucide-react";
+import {
+  X,
+  Check,
+  Undo2,
+  Redo2,
+  Trash2,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  MousePointer2,
+} from "lucide-react";
+import { toast } from "sonner";
 
 /* ─────────── النموذج ─────────── */
 
-type ToolId = "pen" | "highlight" | "line" | "arrow" | "rect" | "ellipse" | "text";
+type ToolId =
+  | "select"
+  | "pen"
+  | "highlight"
+  | "line"
+  | "arrow"
+  | "rect"
+  | "ellipse"
+  | "text";
 
 interface BaseAnno {
   id: string;
@@ -54,6 +74,9 @@ const COLORS = [
   { v: "#DC2626", label: "أحمر", dot: "bg-red-600" },
   { v: "#2563EB", label: "أزرق", dot: "bg-blue-600" },
   { v: "#16A34A", label: "أخضر", dot: "bg-green-600" },
+  { v: "#F59E0B", label: "برتقالي", dot: "bg-amber-500" },
+  { v: "#7C3AED", label: "بنفسجي", dot: "bg-violet-600" },
+  { v: "#EC4899", label: "وردي", dot: "bg-pink-500" },
 ];
 /* ‰ من ارتفاع الصفحة: على A4 (ارتفاع ٨٤٢pt) متوسط ≈ ٣pt */
 const SIZES = [
@@ -74,11 +97,11 @@ const uid = () =>
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 /* ─────────── أيقونات الأدوات ─────────── */
-const svg = (paths: React.ReactNode) => (
+const svg = (paths: React.ReactNode, fill = false) => (
   <svg
     viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
+    fill={fill ? "currentColor" : "none"}
+    stroke={fill ? "none" : "currentColor"}
     strokeWidth={1.8}
     strokeLinecap="round"
     strokeLinejoin="round"
@@ -89,10 +112,16 @@ const svg = (paths: React.ReactNode) => (
   </svg>
 );
 const TOOL_ICONS: Record<ToolId, React.ReactNode> = {
+  select: svg(<path d="M5 3l14 8-6.5 1.5L9 19z" />),
   pen: svg(
     <path d="M12 19l7-7 3 3-7 7-3-3zM18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5zM2 2l7.586 7.586M11 13a2 2 0 1 0 4 0 2 2 0 0 0-4 0z" />
   ),
-  highlight: svg(<path d="M9 11l6 6M4.5 19.5L9 15l-2-2-4.5 4.5v2h2zM14 4l6 6-7 7-6-6z" />),
+  highlight: svg(
+    <>
+      <rect x="3" y="14" width="18" height="4" rx="1" fill="currentColor" opacity="0.45" />
+      <path d="M4.5 14L9 5h6l4.5 9" />
+    </>
+  ),
   line: svg(<path d="M5 19L19 5" />),
   arrow: svg(<path d="M5 19L19 5M19 5h-8M19 5v8" />),
   rect: svg(<rect x="4" y="6" width="16" height="12" rx="1" />),
@@ -100,6 +129,7 @@ const TOOL_ICONS: Record<ToolId, React.ReactNode> = {
   text: svg(<path d="M4 7V5h16v2M12 5v14M9 19h6" />),
 };
 const TOOL_LABEL: Record<ToolId, string> = {
+  select: "تحريك",
   pen: "قلم",
   highlight: "تظليل",
   line: "خط",
@@ -108,10 +138,26 @@ const TOOL_LABEL: Record<ToolId, string> = {
   ellipse: "دائرة",
   text: "نص",
 };
+const TOOL_ORDER: ToolId[] = [
+  "select",
+  "pen",
+  "highlight",
+  "arrow",
+  "line",
+  "rect",
+  "ellipse",
+  "text",
+];
 
 /* ─────────── الرسم على سياق كانفس (الأحجام نسبية للارتفاع h) ─────────── */
 
-function drawAnno(ctx: CanvasRenderingContext2D, a: Anno, w: number, h: number, fontFamily: string) {
+function drawAnno(
+  ctx: CanvasRenderingContext2D,
+  a: Anno,
+  w: number,
+  h: number,
+  fontFamily: string
+) {
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -127,7 +173,8 @@ function drawAnno(ctx: CanvasRenderingContext2D, a: Anno, w: number, h: number, 
     ctx.lineWidth = a.tool === "highlight" ? a.width * 4 * pm : a.width * pm;
     ctx.beginPath();
     ctx.moveTo(s.pts[0][0] * w, s.pts[0][1] * h);
-    for (let i = 1; i < s.pts.length; i++) ctx.lineTo(s.pts[i][0] * w, s.pts[i][1] * h);
+    for (let i = 1; i < s.pts.length; i++)
+      ctx.lineTo(s.pts[i][0] * w, s.pts[i][1] * h);
     if (s.pts.length === 1) ctx.lineTo(s.pts[0][0] * w + pm, s.pts[0][1] * h);
     ctx.stroke();
   } else if (a.tool === "line" || a.tool === "arrow") {
@@ -172,6 +219,66 @@ function drawAnno(ctx: CanvasRenderingContext2D, a: Anno, w: number, h: number, 
   ctx.restore();
 }
 
+/* ─────────── صندوق العنصر (للتحديد والتحريك) ─────────── */
+
+interface Box {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+function annoBox(a: Anno, w: number, h: number, fam: string): Box {
+  const pad = (a.width * (a.tool === "highlight" ? 4 : 1)) / 2000 + 0.005;
+  if (a.tool === "pen" || a.tool === "highlight") {
+    const xs = a.pts.map((p) => p[0]);
+    const ys = a.pts.map((p) => p[1]);
+    return {
+      x0: Math.min(...xs) - pad,
+      y0: Math.min(...ys) - pad,
+      x1: Math.max(...xs) + pad,
+      y1: Math.max(...ys) + pad,
+    };
+  }
+  if (a.tool === "text") {
+    const c = document.createElement("canvas");
+    const ctx = c.getContext("2d")!;
+    ctx.font = `700 ${a.size}px ${fam}`;
+    const twNorm = (ctx.measureText(a.text).width * h) / 1000 / Math.max(1, w);
+    const asc = a.size / 1000;
+    return {
+      x0: a.x - twNorm - pad,
+      y0: a.y - asc * 1.05 - pad,
+      x1: a.x + pad,
+      y1: a.y + asc * 0.35 + pad,
+    };
+  }
+  const s = a as ShapeAnno;
+  return {
+    x0: Math.min(s.x1, s.x2) - pad,
+    y0: Math.min(s.y1, s.y2) - pad,
+    x1: Math.max(s.x1, s.x2) + pad,
+    y1: Math.max(s.y1, s.y2) + pad,
+  };
+}
+
+function moveAnno(a: Anno, dx: number, dy: number): Anno {
+  if (a.tool === "pen" || a.tool === "highlight")
+    return { ...a, pts: a.pts.map(([px, py]) => [px + dx, py + dy]) };
+  if (a.tool === "text") return { ...a, x: a.x + dx, y: a.y + dy };
+  const s = a as ShapeAnno;
+  return { ...s, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy };
+}
+
+const boxHit = (b: Box, x: number, y: number) =>
+  x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1;
+
+/* عائلة الخط الفعلية على الصفحة (next/font يولّد اسمًا مُشفّرًا) */
+const getFam = () =>
+  typeof document !== "undefined"
+    ? getComputedStyle(document.body).fontFamily || "sans-serif"
+    : "sans-serif";
+
 /* ─────────── المكوّن ─────────── */
 
 interface Props {
@@ -186,7 +293,7 @@ interface Props {
 }
 
 export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClose, onSave }: Props) {
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null); // منطقة الكانفس القابلة للتمرير
   const baseRef = useRef<HTMLCanvasElement | null>(null); // طبقة الصفحة (عرض فقط)
   const liveRef = useRef<HTMLCanvasElement>(null); // طبقة الرسم التفاعلية
   const [ready, setReady] = useState(false);
@@ -197,17 +304,37 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
   const [textSize, setTextSize] = useState(36);
   const [doc, setDoc] = useState<EditorDoc>({ annos: {}, past: [], future: [] });
   const [busy, setBusy] = useState<string>("");
-  const [typing, setTyping] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [typing, setTypingState] = useState<{ id: number; x: number; y: number; value: string } | null>(null);
+  const typingRef = useRef<{ id: number; x: number; y: number; value: string } | null>(null);
+  const typingSeq = useRef(0);
+  const setTyping = (t: { id: number; x: number; y: number; value: string } | null) => {
+    typingRef.current = t;
+    setTypingState(t);
+  };
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [areaW, setAreaW] = useState(760);
   const drawing = useRef<Anno | null>(null);
+  const drag = useRef<{ id: string; orig: Anno; sx: number; sy: number } | null>(null);
   const curList = doc.annos[page] ?? [];
+
+  /* عرض المنطقة المتاحة → عرض الصفحة الأساسي */
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setAreaW(Math.max(260, el.clientWidth - 48)));
+    ro.observe(el);
+    setAreaW(Math.max(260, el.clientWidth - 48));
+    return () => ro.disconnect();
+  }, [ready]);
 
   /* ── تحميل الصفحة الأساسية بدقة عالية ── */
   useEffect(() => {
     let alive = true;
     setReady(false);
+    setSelectedId(null);
     (async () => {
-      const wrap = wrapRef.current;
-      const maxCssW = Math.min(wrap?.clientWidth || 640, 900);
+      const maxCssW = 900;
       if (kind === "image") {
         const url = URL.createObjectURL(file);
         const img = new Image();
@@ -253,6 +380,12 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     };
   }, [file, kind, page]);
 
+  /* انتظار جاهزية الخط ثم إعادة رسم (لضمان قياس نص عربي صحيح) */
+  useEffect(() => {
+    if (typeof document !== "undefined" && "fonts" in document)
+      document.fonts.ready.then(() => setZoom((z) => z)).catch(() => undefined);
+  }, []);
+
   /* ── إعادة رسم الطبقة التفاعلية ── */
   const repaint = useCallback(() => {
     const live = liveRef.current;
@@ -262,7 +395,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     live.height = base.height;
     const ctx = live.getContext("2d")!;
     ctx.clearRect(0, 0, live.width, live.height);
-    const fam = getComputedStyle(document.body).fontFamily || "sans-serif";
+    const fam = getFam();
     for (const a of doc.annos[page] ?? []) drawAnno(ctx, a, live.width, live.height, fam);
     if (drawing.current) drawAnno(ctx, drawing.current, live.width, live.height, fam);
   }, [doc.annos, page]);
@@ -278,7 +411,8 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
       past: [...d.past.slice(-40), d.annos],
       future: [],
     }));
-  const undo = () =>
+  const undo = () => {
+    setSelectedId(null);
     setDoc((d) =>
       d.past.length
         ? {
@@ -288,12 +422,15 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           }
         : d
     );
-  const redo = () =>
+  };
+  const redo = () => {
+    setSelectedId(null);
     setDoc((d) =>
       d.future.length
         ? { annos: d.future[0], past: [...d.past, d.annos], future: d.future.slice(1) }
         : d
     );
+  };
 
   /* ── المؤشر → إحداثيات طبيعية ── */
   const norm = (e: React.PointerEvent): [number, number] => {
@@ -306,13 +443,41 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
 
   const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (typing) return;
-    if (tool === "text") {
-      const [x, y] = norm(e);
-      setTyping({ x, y, value: "" });
+    const [x, y] = norm(e);
+    if (tool === "select") {
+      const live = liveRef.current;
+      if (!live) return;
+      let hit: Anno | null = null;
+      const list = doc.annos[page] ?? [];
+      const fam = getFam();
+      for (let i = list.length - 1; i >= 0; i--) {
+        const b = annoBox(list[i], live.width, live.height, fam);
+        if (boxHit(b, x, y)) {
+          hit = list[i];
+          break;
+        }
+      }
+      setSelectedId(hit ? hit.id : null);
+      if (hit) {
+        drag.current = { id: hit.id, orig: hit, sx: x, sy: y };
+        /* نقفل التاريخ قبل أول تحرك — الحركة كلها خطوة تراجع واحدة */
+        setDoc((d) => ({ ...d, past: [...d.past.slice(-40), d.annos], future: [] }));
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
       return;
     }
+    if (tool === "text") {
+      setSelectedId(null);
+      /* نثبّت أي حقل مفتوح أولًا حتى لا يضيع نصه */
+      if (typingRef.current) commitText(typingRef.current.id);
+      const tid = ++typingSeq.current;
+      setTyping({ id: tid, x, y, value: "" });
+      /* منع الافتراضي: mousedown كان سيسرق التركيز فيمحو الحقل فور ظهوره */
+      e.preventDefault();
+      return;
+    }
+    setSelectedId(null);
     e.currentTarget.setPointerCapture(e.pointerId);
-    const [x, y] = norm(e);
     if (tool === "pen" || tool === "highlight") {
       drawing.current = { id: uid(), tool, color, width: size, pts: [[x, y]] };
     } else {
@@ -320,10 +485,26 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     }
     repaint();
   };
+
   const onMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const [x, y] = norm(e);
+    /* سحب عنصر محدد */
+    const dg = drag.current;
+    if (dg) {
+      const dx = x - dg.sx;
+      const dy = y - dg.sy;
+      const moved = moveAnno(dg.orig, dx, dy);
+      setDoc((d) => ({
+        ...d,
+        annos: {
+          ...d.annos,
+          [page]: (d.annos[page] ?? []).map((a) => (a.id === dg.id ? moved : a)),
+        },
+      }));
+      return;
+    }
     const d = drawing.current;
     if (!d) return;
-    const [x, y] = norm(e);
     if (d.tool === "pen" || d.tool === "highlight") (d as StrokeAnno).pts.push([x, y]);
     else {
       (d as ShapeAnno).x2 = x;
@@ -331,19 +512,30 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     }
     repaint();
   };
+
   const onUp = () => {
+    /* إنهاء السحب — التاريخ قُفل عند بدء السحب */
+    if (drag.current) {
+      drag.current = null;
+      return;
+    }
     const d = drawing.current;
     drawing.current = null;
     if (!d) return;
     const t = d as StrokeAnno | ShapeAnno;
     const tiny =
-      "pts" in t ? t.pts.length < 2 : Math.abs(t.x2 - t.x1) < 0.004 && Math.abs(t.y2 - t.y1) < 0.004;
+      "pts" in t
+        ? t.pts.length < 2
+        : Math.abs(t.x2 - t.x1) < 0.004 && Math.abs(t.y2 - t.y1) < 0.004;
     if (!tiny) commit([...curList, d]);
     repaint();
   };
 
-  const commitText = () => {
-    if (typing && typing.value.trim()) {
+  const commitText = (id: number) => {
+    const t = typingRef.current;
+    if (!t || t.id !== id) return; /* حقل قديم — سبقه نقرة جديدة */
+    typingRef.current = null;
+    if (t.value.trim()) {
       commit([
         ...curList,
         {
@@ -351,15 +543,39 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           tool: "text",
           color,
           width: size,
-          x: typing.x,
-          y: typing.y,
+          x: t.x,
+          y: t.y,
           size: textSize,
-          text: typing.value.trim(),
+          text: t.value.trim(),
         },
       ]);
     }
-    setTyping(null);
+    setTypingState(null);
   };
+
+  /* ── اختصارات لوحة المفاتيح ── */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+        e.preventDefault();
+        commit(curList.filter((a) => a.id !== selectedId));
+        setSelectedId(null);
+      } else if (e.key === "Escape") {
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId, curList, page]);
 
   /* ── الحفظ ── */
   const save = async () => {
@@ -370,7 +586,6 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
     if (touched.length === 0) return;
     setBusy("جارٍ الحفظ…");
     try {
-      const fam = getComputedStyle(document.body).fontFamily || "sans-serif";
       if (kind === "pdf") {
         const { PDFDocument } = await import("pdf-lib");
         const bytes = new Uint8Array(await file.arrayBuffer());
@@ -381,6 +596,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
           ignoreEncryption: true,
           updateMetadata: false,
         });
+        const fam = getFam();
         for (const pg of touched) {
           const p = await jdoc.getPage(pg);
           const v1 = p.getViewport({ scale: 1 });
@@ -410,219 +626,333 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, c.width, c.height);
         ctx.drawImage(base, 0, 0, c.width, c.height);
-        for (const a of doc.annos[page] ?? []) drawAnno(ctx, a, c.width, c.height, fam);
+        for (const a of doc.annos[page] ?? []) drawAnno(ctx, a, c.width, c.height, getFam());
         const blob: Blob = await new Promise((res) => c.toBlob((b) => res(b!), "image/png"));
         onSave(`${fileName.replace(/\.[^.]+$/, "")} (معدّل).png`, blob);
       }
+    } catch {
+      toast.error("تعذّر الحفظ — جرّب مرة أخرى");
     } finally {
       setBusy("");
     }
   };
 
+  const maybeClose = () => {
+    const hasAny = Object.values(doc.annos).some((v) => v.length > 0);
+    if (hasAny && !window.confirm("هناك تعديلات غير محفوظة — إغلاق بدون حفظ؟")) return;
+    onClose();
+  };
+
   const hasAny = Object.values(doc.annos).some((v) => v.length > 0);
+  const selItem = curList.find((a) => a.id === selectedId) ?? null;
+  const pageNav = (
+    <span className="flex items-center gap-1.5 rounded-xl border border-border bg-white px-2 py-1">
+      <button
+        onClick={() => onPage(Math.max(1, page - 1))}
+        disabled={page <= 1}
+        aria-label="الصفحة السابقة"
+        className="grid size-6 place-items-center rounded-md text-base font-extrabold text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
+      >
+        ›
+      </button>
+      <span className="min-w-[72px] text-center text-[11px] font-extrabold text-muted-foreground">
+        صفحة {toHindiDigits(page)} من {toHindiDigits(pages)}
+      </span>
+      <button
+        onClick={() => onPage(Math.min(pages, page + 1))}
+        disabled={page >= pages}
+        aria-label="الصفحة التالية"
+        className="grid size-6 place-items-center rounded-md text-base font-extrabold text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
+      >
+        ‹
+      </button>
+    </span>
+  );
+
+  const pageW = Math.round(areaW * zoom);
 
   return (
-    <div className="flex flex-col" data-testid="editor-layer">
-      {/* شريط الأدوات */}
-      <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-border bg-white p-2 shadow-sm">
-        {(Object.keys(TOOL_ICONS) as ToolId[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTool(t)}
-            aria-label={TOOL_LABEL[t]}
-            title={TOOL_LABEL[t]}
-            className={cn(
-              "flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold transition",
-              tool === t
-                ? "bg-primary/10 text-primary outline outline-1 outline-primary/30"
-                : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
-            )}
-          >
-            {TOOL_ICONS[t]}
-            <span className="hidden md:inline">{TOOL_LABEL[t]}</span>
-          </button>
-        ))}
-        <span className="mx-1 h-6 w-px bg-border" aria-hidden />
-        {COLORS.map((c) => (
-          <button
-            key={c.v}
-            onClick={() => setColor(c.v)}
-            aria-label={`لون ${c.label}`}
-            title={`لون ${c.label}`}
-            className={cn(
-              "size-6 rounded-full border-2 transition",
-              c.dot,
-              color === c.v ? "border-primary ring-2 ring-primary/25" : "border-white shadow"
-            )}
-          />
-        ))}
-        {tool === "text" ? (
-          <span className="flex items-center gap-0.5">
-            {TEXT_SIZES.map((s) => (
-              <button
-                key={s.v}
-                onClick={() => setTextSize(s.v)}
-                className={cn(
-                  "rounded-lg px-2 py-1 text-[10px] font-extrabold",
-                  textSize === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </span>
-        ) : (
-          <span className="flex items-center gap-0.5">
-            {SIZES.map((s) => (
-              <button
-                key={s.v}
-                onClick={() => setSize(s.v)}
-                className={cn(
-                  "rounded-lg px-2 py-1 text-[10px] font-extrabold",
-                  size === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </span>
-        )}
-        <span className="mx-1 h-6 w-px bg-border" aria-hidden />
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-slate-200/95 backdrop-blur-sm"
+      dir="rtl"
+      data-testid="editor-layer"
+      aria-label="محرر الملف"
+    >
+      {/* ══ الشريط العلوي ══ */}
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-white px-3 shadow-sm">
         <button
-          onClick={undo}
-          disabled={doc.past.length === 0}
-          aria-label="تراجع"
-          title="تراجع"
-          className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
+          onClick={maybeClose}
+          aria-label="إغلاق المحرر"
+          className="grid size-9 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-red-50 hover:text-red-600"
         >
-          <Undo2 className="size-4" aria-hidden />
+          <X className="size-5" aria-hidden />
         </button>
-        <button
-          onClick={redo}
-          disabled={doc.future.length === 0}
-          aria-label="إعادة"
-          title="إعادة"
-          className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
-        >
-          <Redo2 className="size-4" aria-hidden />
-        </button>
-        <button
-          onClick={() => curList.length > 0 && commit([])}
-          disabled={curList.length === 0}
-          aria-label="مسح هذه الصفحة"
-          title="مسح هذه الصفحة"
-          className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
-        >
-          <Trash2 className="size-4" aria-hidden />
-        </button>
-
+        <div className="min-w-0">
+          <p className="truncate text-sm font-extrabold leading-tight">تعديل: {fileName}</p>
+          <p className="text-[10px] leading-tight text-muted-foreground">
+            {kind === "pdf" ? "PDF — حتى الماسوح ضوئيًا" : "صورة"} · الشغل داخل متصفحك
+          </p>
+        </div>
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={onClose} className="font-bold text-muted-foreground">
-          <X className="size-4" aria-hidden />
-          إغلاق
-        </Button>
+        {kind === "pdf" && pages > 1 && pageNav}
+        <span className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden />
+        <div className="flex items-center gap-0.5 rounded-xl border border-border bg-white px-1 py-0.5">
+          <button
+            onClick={undo}
+            disabled={doc.past.length === 0}
+            aria-label="تراجع"
+            title="تراجع (Ctrl+Z)"
+            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
+          >
+            <Undo2 className="size-4" aria-hidden />
+          </button>
+          <button
+            onClick={redo}
+            disabled={doc.future.length === 0}
+            aria-label="إعادة"
+            title="إعادة (Ctrl+Y)"
+            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary disabled:opacity-30"
+          >
+            <Redo2 className="size-4" aria-hidden />
+          </button>
+        </div>
+        <div className="hidden items-center gap-0.5 rounded-xl border border-border bg-white px-1 py-0.5 md:flex">
+          <button
+            onClick={() => setZoom((z) => Math.max(0.4, z / 1.25))}
+            aria-label="تصغير"
+            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary"
+          >
+            <ZoomOut className="size-4" aria-hidden />
+          </button>
+          <span className="min-w-[44px] text-center text-[11px] font-extrabold text-muted-foreground">
+            {toHindiDigits(Math.round(zoom * 100))}٪
+          </span>
+          <button
+            onClick={() => setZoom((z) => Math.min(3, z * 1.25))}
+            aria-label="تكبير"
+            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary"
+          >
+            <ZoomIn className="size-4" aria-hidden />
+          </button>
+          <button
+            onClick={() => setZoom(1)}
+            aria-label="ملء العرض"
+            title="ملء العرض"
+            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-primary/5 hover:text-primary"
+          >
+            <Maximize className="size-4" aria-hidden />
+          </button>
+        </div>
         <Button
           size="sm"
           disabled={!hasAny || !!busy}
           onClick={save}
-          className="bg-emerald-600 font-extrabold text-white hover:bg-emerald-700"
+          className="bg-emerald-600 px-4 font-extrabold text-white hover:bg-emerald-700"
         >
           <Check className="size-4" aria-hidden />
           {busy || "حفظ التعديلات"}
         </Button>
       </div>
 
-      {/* الكانفس */}
-      <div
-        ref={wrapRef}
-        className="relative mt-3 flex min-h-[420px] flex-1 items-start justify-center overflow-auto rounded-2xl border border-border bg-slate-50 p-4"
-      >
-        {ready && aspect ? (
-          <div
-            className="relative shadow-xl shadow-black/10"
-            style={{ width: "min(100%, 900px)", aspectRatio: `${aspect}` }}
-          >
-            <canvas
-              className="absolute inset-0 h-full w-full rounded-md bg-white"
-              key={`${page}-${ready}`}
-              ref={(el) => {
-                if (el && baseRef.current) {
-                  el.width = baseRef.current.width;
-                  el.height = baseRef.current.height;
-                  el.getContext("2d")!.drawImage(baseRef.current, 0, 0);
-                }
+      {/* ══ الجسم: شريط أدوات + كانفس ══ */}
+      <div className="flex min-h-0 flex-1 max-md:flex-col">
+        {/* شريط الأدوات الجانبي (يمين) */}
+        <div className="flex shrink-0 gap-1.5 overflow-x-auto border-l border-border bg-white p-2 max-md:border-b max-md:border-l-0 md:w-[84px] md:flex-col md:overflow-y-auto">
+          {TOOL_ORDER.map((t) => (
+            <button
+              key={t}
+              onClick={() => {
+                setTool(t);
+                if (t !== "select") setSelectedId(null);
               }}
-            />
-            <canvas
-              ref={liveRef}
-              onPointerDown={onDown}
-              onPointerMove={onMove}
-              onPointerUp={onUp}
-              onPointerLeave={onUp}
+              aria-label={TOOL_LABEL[t]}
+              title={TOOL_LABEL[t]}
               className={cn(
-                "absolute inset-0 h-full w-full touch-none rounded-md",
-                tool === "text" ? "cursor-text" : "cursor-crosshair"
+                "flex shrink-0 flex-col items-center gap-0.5 rounded-xl px-2.5 py-2 text-[9px] font-extrabold transition",
+                tool === t
+                  ? "bg-primary text-primary-foreground shadow-md shadow-primary/25"
+                  : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
               )}
-              aria-label="لوحة التعديل"
-            />
-            {typing && (
-              <div
-                className="absolute z-10"
-                style={{
-                  left: `${typing.x * 100}%`,
-                  top: `${typing.y * 100}%`,
-                  transform: "translateY(-90%)",
-                }}
-                dir="rtl"
-              >
-                <input
-                  autoFocus
-                  value={typing.value}
-                  onChange={(e) => setTyping({ ...typing, value: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitText();
-                    if (e.key === "Escape") setTyping(null);
-                  }}
-                  onBlur={commitText}
-                  placeholder="اكتب ثم Enter"
-                  className="rounded-lg border-2 border-primary/50 bg-white/95 px-2 py-1 font-bold shadow-lg outline-none"
-                />
-              </div>
-            )}
+            >
+              {TOOL_ICONS[t]}
+              {TOOL_LABEL[t]}
+            </button>
+          ))}
+          <span className="mx-1 hidden w-px bg-border md:block" aria-hidden />
+          {/* الألوان */}
+          <div className="flex items-center gap-1.5 max-md:pl-2 md:grid md:grid-cols-2 md:px-1">
+            {COLORS.map((c) => (
+              <button
+                key={c.v}
+                onClick={() => setColor(c.v)}
+                aria-label={`لون ${c.label}`}
+                title={`لون ${c.label}`}
+                className={cn(
+                  "size-6 shrink-0 rounded-full border-2 transition",
+                  c.dot,
+                  color === c.v ? "border-primary ring-2 ring-primary/25" : "border-white shadow"
+                )}
+              />
+            ))}
+            <label
+              title="لون مخصص"
+              className="relative grid size-6 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-full border-2 border-white bg-gradient-to-br from-rose-400 via-amber-300 to-sky-400 shadow"
+            >
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                aria-label="لون مخصص"
+                className="absolute inset-0 cursor-pointer opacity-0"
+              />
+            </label>
           </div>
-        ) : (
-          <div className="size-64 max-w-full animate-pulse rounded-md bg-white shadow-lg" />
-        )}
-      </div>
-
-      {/* ترقيم الصفحات داخل المحرر */}
-      {kind === "pdf" && pages > 1 && (
-        <div className="mt-3 flex items-center justify-center gap-3">
+          <span className="mx-1 hidden w-px bg-border md:block" aria-hidden />
+          {/* السماكة / حجم النص */}
+          <div className="flex items-center gap-1 max-md:pl-2 md:flex-col md:px-1">
+            {tool === "text"
+              ? TEXT_SIZES.map((s) => (
+                  <button
+                    key={s.v}
+                    onClick={() => setTextSize(s.v)}
+                    className={cn(
+                      "shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold",
+                      textSize === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                    )}
+                  >
+                    {s.label}
+                  </button>
+                ))
+              : SIZES.map((s) => (
+                  <button
+                    key={s.v}
+                    onClick={() => setSize(s.v)}
+                    className={cn(
+                      "shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold",
+                      size === s.v ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                    )}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+          </div>
+          <span className="flex-1" aria-hidden />
           <button
-            onClick={() => onPage(Math.max(1, page - 1))}
-            disabled={page <= 1}
-            aria-label="الصفحة السابقة"
-            className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground disabled:opacity-30"
+            onClick={() => curList.length > 0 && commit([])}
+            disabled={curList.length === 0}
+            aria-label="مسح هذه الصفحة"
+            title="مسح هذه الصفحة"
+            className="flex shrink-0 items-center gap-1 rounded-xl px-2.5 py-2 text-[9px] font-extrabold text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:opacity-30 md:flex-col"
           >
-            ›
-          </button>
-          <span className="text-sm font-extrabold text-muted-foreground">
-            صفحة {toHindiDigits(page)} من {toHindiDigits(pages)}
-            {(doc.annos[page] ?? []).length > 0 && " · عليها تعديلات"}
-          </span>
-          <button
-            onClick={() => onPage(Math.min(pages, page + 1))}
-            disabled={page >= pages}
-            aria-label="الصفحة التالية"
-            className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground disabled:opacity-30"
-          >
-            ‹
+            <Trash2 className="size-5" aria-hidden />
+            مسح الصفحة
           </button>
         </div>
-      )}
-      <p className="mt-2 text-center text-[10px] text-muted-foreground">
-        التعديلات تُطبع فوق الصفحة كما تراها تمامًا — الصفحات الأخرى تبقى بلا تغيير
-      </p>
+
+        {/* منطقة الكانفس */}
+        <div ref={wrapRef} className="min-h-0 min-w-0 flex-1 overflow-auto p-4 md:p-8">
+          {ready && aspect ? (
+            <div
+              className="relative mx-auto shadow-2xl shadow-black/20"
+              style={{ width: `${pageW}px`, aspectRatio: `${aspect}` }}
+            >
+              <canvas
+                className="absolute inset-0 h-full w-full rounded-sm bg-white"
+                key={`${page}-${ready}`}
+                ref={(el) => {
+                  if (el && baseRef.current) {
+                    el.width = baseRef.current.width;
+                    el.height = baseRef.current.height;
+                    el.getContext("2d")!.drawImage(baseRef.current, 0, 0);
+                  }
+                }}
+              />
+              <canvas
+                ref={liveRef}
+                onPointerDown={onDown}
+                onPointerMove={onMove}
+                onPointerUp={onUp}
+                onPointerLeave={onUp}
+                className={cn(
+                  "absolute inset-0 h-full w-full touch-none rounded-sm",
+                  tool === "select"
+                    ? "cursor-default"
+                    : tool === "text"
+                      ? "cursor-text"
+                      : "cursor-crosshair"
+                )}
+                aria-label="لوحة التعديل"
+              />
+              {/* صندوق تحديد العنصر */}
+              {selItem &&
+                (() => {
+                  const live = liveRef.current;
+                  if (!live) return null;
+                  const b = annoBox(selItem, live.width, live.height, getFam());
+                  return (
+                    <div
+                      className="pointer-events-none absolute z-10"
+                      style={{
+                        left: `${b.x0 * 100}%`,
+                        top: `${b.y0 * 100}%`,
+                        width: `${(b.x1 - b.x0) * 100}%`,
+                        height: `${(b.y1 - b.y0) * 100}%`,
+                      }}
+                    >
+                      <div className="absolute inset-0 rounded-sm border-2 border-dashed border-primary/70" />
+                      <button
+                        onClick={() => {
+                          commit(curList.filter((a) => a.id !== selItem.id));
+                          setSelectedId(null);
+                        }}
+                        aria-label="حذف المحدد"
+                        title="حذف (Delete)"
+                        className="pointer-events-auto absolute -top-10 right-0 grid size-8 place-items-center rounded-lg bg-red-500 text-white shadow-lg hover:bg-red-600"
+                      >
+                        <Trash2 className="size-4" aria-hidden />
+                      </button>
+                    </div>
+                  );
+                })()}
+              {/* إدخال النص */}
+              {typing && (
+                <div
+                  className="absolute z-10"
+                  style={{
+                    left: `${typing.x * 100}%`,
+                    top: `${typing.y * 100}%`,
+                    transform: "translateY(-90%)",
+                  }}
+                  dir="rtl"
+                >
+                  <input
+                    autoFocus
+                    value={typing.value}
+                    onChange={(e) => setTyping({ ...typing, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitText(typing.id);
+                      if (e.key === "Escape") setTyping(null);
+                    }}
+                    onBlur={() => commitText(typing.id)}
+                    placeholder="اكتب ثم Enter"
+                    style={{ color, fontSize: `${Math.max(14, textSize * zoom * 0.35)}px` }}
+                    className="rounded-lg border-2 border-primary/50 bg-white/95 px-2 py-1 font-bold shadow-lg outline-none"
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="mx-auto size-64 max-w-full animate-pulse rounded-md bg-white shadow-lg" />
+          )}
+        </div>
+      </div>
+
+      {/* ══ شريط التلميح السفلي ══ */}
+      <div className="flex h-8 shrink-0 items-center justify-center gap-3 border-t border-border bg-white px-3 text-[10px] text-muted-foreground">
+        <span>التعديلات تُطبع فوق الصفحة كما تراها تمامًا — الصفحات الأخرى تبقى كما هي</span>
+        <span className="hidden sm:inline">·</span>
+        <span className="hidden sm:inline">تراجع Ctrl+Z · إعادة Ctrl+Y · حذف المحدد Delete</span>
+      </div>
     </div>
   );
 }
