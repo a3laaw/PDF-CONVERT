@@ -78,7 +78,7 @@ const COLORS = [
   { v: "#7C3AED", label: "بنفسجي", dot: "bg-violet-600" },
   { v: "#EC4899", label: "وردي", dot: "bg-pink-500" },
 ];
-/* ‰ من ارتفاع الصفحة: على A4 (ارتفاع ٨٤٢pt) متوسط ≈ ٣pt */
+/* ‰ من ارتفاع الصفحة: على A4 (ارتفاع 842pt) متوسط ≈ 3pt */
 const SIZES = [
   { v: 2, label: "رفيع" },
   { v: 3.5, label: "متوسط" },
@@ -725,7 +725,7 @@ export function EditorCanvas({ fileName, kind, file, page, pages, onPage, onClos
             <ZoomOut className="size-4" aria-hidden />
           </button>
           <span className="min-w-[44px] text-center text-[11px] font-extrabold text-muted-foreground">
-            {toHindiDigits(Math.round(zoom * 100))}٪
+            {toHindiDigits(Math.round(zoom * 100))}%
           </span>
           <button
             onClick={() => setZoom((z) => Math.min(3, z * 1.25))}

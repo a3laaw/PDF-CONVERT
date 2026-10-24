@@ -25,7 +25,7 @@ import { PagePickerDialog } from "./page-picker";
 import { ResultsStrip } from "./results-strip";
 import { PanelTitle } from "./file-panel";
 
-/** عمود ٢ — الخطوات: مرقّمة قابلة للتعديل والترتيب والتنفيذ */
+/** عمود 2 — الخطوات: مرقّمة قابلة للتعديل والترتيب والتنفيذ */
 export function StepsPanel() {
   const steps = useWorkspace((s) => s.steps);
   const files = useWorkspace((s) => s.files);

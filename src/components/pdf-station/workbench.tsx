@@ -131,7 +131,7 @@ async function renderPageDataUrl(file: File, pageNo: number, maxW = 820): Promis
 }
 
 function fmtSize(b: number): string {
-  if (b >= 1048576) return `${toHindiDigits((b / 1048576).toFixed(1).replace(".", "٫"))} م.ب`;
+  if (b >= 1048576) return `${toHindiDigits((b / 1048576).toFixed(1))} م.ب`;
   return `${toHindiDigits(Math.max(1, Math.round(b / 1024)))} ك.ب`;
 }
 

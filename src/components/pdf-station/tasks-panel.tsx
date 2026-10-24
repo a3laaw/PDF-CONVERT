@@ -13,7 +13,7 @@ import { toHindiDigits } from "@/lib/arabic";
 import { useWorkspace } from "@/store/workspace";
 import { PanelTitle } from "./file-panel";
 
-/** عمود ٣ — مهام شائعة تتغير حسب ملفاتك + سجل الطلبات */
+/** عمود 3 — مهام شائعة تتغير حسب ملفاتك + سجل الطلبات */
 export function TasksPanel() {
   const files = useWorkspace((s) => s.files);
   const history = useWorkspace((s) => s.history);

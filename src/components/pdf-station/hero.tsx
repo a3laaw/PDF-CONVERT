@@ -43,7 +43,7 @@ export function Hero({ onStart }: { onStart: () => void }) {
           <CommandBar onInterpreted={onStart} />
         </motion.div>
 
-        {/* التدفق المرقّم ١٢٣ */}
+        {/* التدفق المرقّم 123 */}
         <motion.ol
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

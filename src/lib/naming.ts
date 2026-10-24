@@ -50,7 +50,7 @@ export function resultName(op: OpId, fileName: string, index = 0, ext?: string):
   }
 }
 
-/** منع تكرار الأسماء داخل دفعة واحدة — يضيف ٢ ٣ … عند التعارض */
+/** منع تكرار الأسماء داخل دفعة واحدة — يضيف 2 3 … عند التعارض */
 export function uniqueName(name: string, taken: Set<string>): string {
   if (!taken.has(name)) {
     taken.add(name);

@@ -199,7 +199,6 @@ function extractParams(op: OpId, original: string): Record<string, string> {
     }
     case "page_numbers": {
       params.format = /صفحه \d+ من|من \d+|صفحه من/.test(t) ? "صفحة من" : "رقم فقط";
-      params.digits = /[0-9]/.test(original) && !/[\u0660-\u0669]/.test(original) ? "لاتيني" : "هندي";
       break;
     }
     case "extract":
@@ -264,7 +263,7 @@ export function stepLabel(op: OpId, params: Record<string, string>, filesCount =
     case "watermark":
       return `ختم «${params.text ?? "مسودة"}»`;
     case "page_numbers":
-      return params.format === "صفحة من" ? "ترقيم: صفحة ٣ من ١٠" : "ترقيم الصفحات";
+      return params.format === "صفحة من" ? "ترقيم: صفحة 3 من 10" : "ترقيم الصفحات";
     case "images_to_pdf":
       return "تحويل الصور إلى PDF";
     case "pdf_to_images":
@@ -466,8 +465,8 @@ export function suggestRecipes(
     out.push({
       id: "r-number",
       title: "ترقيم قبل الطباعة",
-      desc: "رقّم صفحات المستند بأرقام هندية أنيقة أسفل كل صفحة",
-      steps: [{ op: "page_numbers", params: { format: "رقم فقط", digits: "هندي" } }],
+      desc: "رقّم صفحات المستند بأرقام واضحة أسفل كل صفحة",
+      steps: [{ op: "page_numbers", params: { format: "رقم فقط" } }],
       icon: "🔢",
     });
   }

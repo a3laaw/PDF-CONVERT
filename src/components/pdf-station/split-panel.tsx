@@ -33,10 +33,10 @@ export function SplitPanel({ fileName, file, pages, onClose }: Props) {
   const [overA, setOverA] = useState(false);
   const [overB, setOverB] = useState(false);
   const [busy, setBusy] = useState(false);
-  /* طابع زمني لبداية السحب — يُبطّل النقر خلال ٣٠٠مللي فقط حتى لا تعلّق السحوبات المجهضة النقرات */
+  /* طابع زمني لبداية السحب — يُبطّل النقر خلال 300مللي فقط حتى لا تعلّق السحوبات المجهضة النقرات */
   const draggedAt = useRef(0);
 
-  /* مصغرات بعرض ١٥٠px — أوضح من مصغرات الشريط الجانبي */
+  /* مصغرات بعرض 150px — أوضح من مصغرات الشريط الجانبي */
   useEffect(() => {
     let alive = true;
     setThumbErr(false);
@@ -44,7 +44,8 @@ export function SplitPanel({ fileName, file, pages, onClose }: Props) {
       .then((arr) => {
         if (alive) setThumbs(arr);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("thumbs failed:", err);
         if (alive) setThumbErr(true);
       });
     return () => {

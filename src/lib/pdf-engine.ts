@@ -486,11 +486,10 @@ async function opPageNumbers(
     ctx.onProgress?.(`جارٍ ترقيم «${input.name}»…`);
     const doc = await loadPdfLib(await bytesOf(input));
     const total = doc.getPageCount();
-    const hindi = (params.digits ?? "هندي") === "هندي";
     const fmt = params.format ?? "رقم فقط";
     for (let i = 1; i <= total; i++) {
-      const shown = hindi ? toHindiDigits(i) : String(i);
-      const text = fmt === "صفحة من" ? `صفحة ${shown} من ${hindi ? toHindiDigits(total) : total}` : shown;
+      const shown = String(i);
+      const text = fmt === "صفحة من" ? `صفحة ${shown} من ${total}` : shown;
       const { bytes: png, w, h } = await arabicTextPng(text, { size: 60, color: "#1b2438" });
       const img = await doc.embedPng(png);
       const page = doc.getPage(i - 1);

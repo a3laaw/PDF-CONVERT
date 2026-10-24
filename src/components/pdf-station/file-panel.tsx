@@ -20,7 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatBytes, toHindiDigits } from "@/lib/arabic";
 import { useWorkspace } from "@/store/workspace";
 
-/** عمود ١ — الملفات: رفع، مصغّرات، وسوم، ترتيب الدمج */
+/** عمود 1 — الملفات: رفع، مصغّرات، وسوم، ترتيب الدمج */
 export function FilePanel() {
   const files = useWorkspace((s) => s.files);
   const addFiles = useWorkspace((s) => s.addFiles);
