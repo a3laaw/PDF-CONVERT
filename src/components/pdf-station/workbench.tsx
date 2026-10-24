@@ -110,6 +110,29 @@ const TOOLBAR: { id: OpId | "editor"; label: string }[] = [
   { id: "extract_text", label: "نص" },
 ];
 
+/* المرحلة 2 — الأدوات السياقية: لكل قسم زرّه الخاص بفعله العربي، لا يظهر إلا داخل قسمه */
+const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
+  compress: { verb: "صغّر الحجم" },
+  merge: { verb: "ادمج الملفات" },
+  extract: { verb: "استخرج الصفحات" },
+  delete: { verb: "احذف الصفحات" },
+  rotate: { verb: "دوّر الصفحات" },
+  reorder: { verb: "رتّب الصفحات" },
+  page_numbers: { verb: "رقّم الصفحات" },
+  watermark: { verb: "ضع الختم" },
+  remove_watermark: { verb: "نظّف العلامات" },
+  pdf_to_images: { verb: "حوّل لصور" },
+  images_to_pdf: { verb: "اعمل PDF من الصور" },
+  extract_text: { verb: "استخرج النص" },
+};
+
+/* الأدوات التي تعمل على صفحات محددة — زرّها يعرض عدد الصفحات المختارة */
+const PAGES_TOOLS: OpId[] = ["extract", "delete", "rotate"];
+
+function pagesLabel(n: number): string {
+  return n === 1 ? "صفحة واحدة" : n === 2 ? "صفحتين" : `${toHindiDigits(n)} صفحات`;
+}
+
 /* ─────────── أدوات مساعدة ─────────── */
 
 async function renderPageDataUrl(file: File, pageNo: number, maxW = 820): Promise<string> {
@@ -169,6 +192,7 @@ export function Workbench() {
   const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const thumbsReq = useRef<Set<string>>(new Set());
+  const bottomBarRef = useRef<HTMLDivElement>(null);
 
   /* الملف النشط: المعيّن بالنقر أو آخر ملف أُضيف — اشتقاق بلا effects */
   const activeFile = files.find((f) => f.id === activeId) ?? files[files.length - 1] ?? null;
@@ -225,6 +249,13 @@ export function Workbench() {
     const pf = TOOLS_BY_ID[id].fields.find((f) => f.pagesPicker);
     if (pf) def[pf.key] = selPages.join(",");
     setParams(def);
+    /* على الجوال: القسم السفلي بعيد عن الشريط — مرّر إليه ليظهر زرّ الأداة السياقي فورًا */
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      window.setTimeout(
+        () => bottomBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+        80
+      );
+    }
   };
 
   const togglePage = (n: number) => {
@@ -288,6 +319,14 @@ export function Workbench() {
     addEditorResult(name, blob);
     setEditing(false);
     toast.success("حُفظت التعديلات — الملف جاهز للتنزيل");
+  };
+
+  /* اسم زرّ الأداة السياقي: الفعل العربي + عدد الصفحات المختارة إن وُجد */
+  const actionLabel = (id: OpId): string => {
+    const verb = TOOL_ACTION[id]?.verb ?? "نفّذ";
+    if (PAGES_TOOLS.includes(id) && selPages.length > 0)
+      return `${verb} (${pagesLabel(selPages.length)})`;
+    return verb;
   };
 
   const execute = async () => {
@@ -597,48 +636,60 @@ export function Workbench() {
             )}
           </div>
 
-          {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة (يُخفى أثناء التعديل والفصل) ─── */}
+          {/* ─── الشريط السفلي: قسم الأداة + زرّها السياقي + اسم النتيجة (يُخفى أثناء التعديل والفصل) ─── */}
           {!editing && !splitMode && (
             <>
-              <div className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm">
+              <div
+                ref={bottomBarRef}
+                className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm scroll-mt-24"
+              >
             {tool === "remove_watermark" && (
               <span className="w-full text-[10px] text-muted-foreground">
                 هذه الأداة تعالج الملف على الخادم ويُحذف فور انتهاء التنفيذ — والعلامات المرسومة داخل صور قد لا تُحذف
               </span>
             )}
             {tool ? (
-              TOOLS_BY_ID[tool].fields.map((f) => (
-                <span key={f.key} className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-bold text-muted-foreground">{f.label}</span>
-                  {f.type === "select" ? (
-                    <select
-                      value={params[f.key] ?? f.default ?? ""}
-                      onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
-                      className="rounded-lg border border-border bg-white px-2 py-1.5 text-xs font-bold"
-                    >
-                      {f.options?.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      value={params[f.key] ?? ""}
-                      onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
-                      placeholder={f.placeholder}
-                      className="w-44 rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold placeholder:font-normal placeholder:text-muted-foreground/60"
-                    />
-                  )}
+              <>
+                <span
+                  aria-label="القسم الحالي"
+                  className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-extrabold text-primary"
+                >
+                  <span aria-hidden>{TOOLS_BY_ID[tool].emoji}</span>
+                  {TOOLS_BY_ID[tool].name}
                 </span>
-              ))
+                {TOOLS_BY_ID[tool].fields.map((f) => (
+                  <span key={f.key} className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-bold text-muted-foreground">{f.label}</span>
+                    {f.type === "select" ? (
+                      <select
+                        value={params[f.key] ?? f.default ?? ""}
+                        onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+                        className="rounded-lg border border-border bg-white px-2 py-1.5 text-xs font-bold"
+                      >
+                        {f.options?.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={params[f.key] ?? ""}
+                        onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+                        placeholder={f.placeholder}
+                        className="w-44 rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold placeholder:font-normal placeholder:text-muted-foreground/60"
+                      />
+                    )}
+                  </span>
+                ))}
+              </>
             ) : (
               <span className="px-1 text-xs font-bold text-muted-foreground">
                 {activeFile?.kind === "image"
-                  ? "الصور تتحول إلى PDF بأداة «من صور»"
+                  ? "الصور تتحول إلى PDF بأداة «من صور» — ادخل على القسم وسيظهر زرّها"
                   : activeFile && activeFile.kind !== "pdf"
                     ? "هذا النوع غير مدعوم حاليًا — PDF والصور فقط"
-                    : "اختر أداة من الشريط"}
+                    : "اختر أداة من الشريط وسيظهر زرّها هنا"}
               </span>
             )}
             <span className="flex-1" />
@@ -647,9 +698,17 @@ export function Workbench() {
                 تُحفظ باسم <b className="text-xs text-foreground">{expectedName}</b>
               </span>
             )}
-            <Button size="sm" disabled={!tool || running} onClick={execute} className="px-6 font-extrabold">
-              {running ? "جارٍ التنفيذ…" : "نفّذ"}
-            </Button>
+            {tool && (
+              <Button
+                size="sm"
+                disabled={running}
+                onClick={execute}
+                aria-label={actionLabel(tool)}
+                className="px-6 font-extrabold"
+              >
+                {running ? "جارٍ التنفيذ…" : actionLabel(tool)}
+              </Button>
+            )}
           </div>
           {running && (
             <div className="mt-2">
