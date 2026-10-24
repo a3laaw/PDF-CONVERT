@@ -78,6 +78,28 @@ const INTENTS: Intent[] = [
       /علامه مائيه|وارتمارك|watermark/.test(t) || hasWord(t, "ختم", "طابع", "مسوده", "سري", "معتمد"),
   },
   {
+    op: "sign",
+    priority: 2,
+    phrases: ["أضف توقيعي على الملف", "توقيع إلكتروني"],
+    match: (t) =>
+      /توقيع|امضاء|امضا|signature/.test(t) || hasWord(t, "وقّع", "وقع", "امضي"),
+  },
+  {
+    op: "unlock",
+    priority: 2,
+    phrases: ["فك قفل الملف المقفول", "افتح قفل كلمة السر"],
+    match: (t) =>
+      /فك القفل|فك التشفير|افتح القفل|افتح قفل|ازاله كلمه السر|ازاله القفل|بدون باسورد|unlock/.test(t),
+  },
+  {
+    op: "protect",
+    priority: 2,
+    phrases: ["اقفل الملف بكلمة سر", "حماية بكلمة سر"],
+    match: (t) =>
+      /باسورد|كلمه سر|تشفير|password|protect|اقفل|قفل/.test(t) &&
+      !/فك القفل|افتح القفل|افتح قفل|فك التشفير/.test(t),
+  },
+  {
     op: "compress",
     priority: 3,
     phrases: ["صغّر حجم الملف", "ضغط PDF", "خفف الحجم"],
@@ -361,6 +383,12 @@ export function stepLabel(op: OpId, params: Record<string, string>, filesCount =
       return "دمج صفحات من عدة ملفات";
     case "ocr":
       return "قراءة النص بالمسح الضوئي (OCR)";
+    case "sign":
+      return "تثبيت توقيع إلكتروني";
+    case "protect":
+      return "قفل الملف بكلمة سر";
+    case "unlock":
+      return "فتح قفل كلمة السر";
     default:
       return tool.name;
   }

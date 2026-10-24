@@ -24,7 +24,10 @@ export type OpId =
   | "merge_pages"
   | "ocr"
   | "pdf_to_word"
-  | "pdf_to_excel";
+  | "pdf_to_excel"
+  | "sign"
+  | "protect"
+  | "unlock";
 
 /** ملف داخل مساحة العمل */
 export interface WorkspaceFile {
@@ -39,7 +42,7 @@ export interface WorkspaceFile {
   addedAt: number;
 }
 
-export type FieldType = "text" | "select" | "number";
+export type FieldType = "text" | "select" | "number" | "password";
 
 /** حقل معامل لخطوة — يولّد الواجهة منه */
 export interface OpField {
@@ -58,7 +61,7 @@ export interface ToolDef {
   id: OpId;
   name: string;
   desc: string;
-  category: "تنظيم" | "الحجم" | "إضافات" | "تحويل" | "بيانات";
+  category: "تنظيم" | "الحجم" | "إضافات" | "تحويل" | "بيانات" | "حماية";
   emoji: string;
   keywords: string[]; // للبحث والتفسير الضبابي
   accepts: FileKind[]; // أنواع الملفات المقبولة

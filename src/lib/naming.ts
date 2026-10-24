@@ -24,6 +24,9 @@ export const OP_SUFFIX: Partial<Record<OpId, string>> = {
   ocr: "نص-ممسوح",
   pdf_to_word: "وورد",
   pdf_to_excel: "اكسل",
+  sign: "موقّع",
+  protect: "محمي",
+  unlock: "مفتوح",
 };
 /** إزالة الامتداد */
 export function stripExt(name: string): string {

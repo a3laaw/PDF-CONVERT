@@ -12,6 +12,7 @@ import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
 import { CadViewer } from "@/components/pdf-station/cad-viewer";
 import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { MergePagesPanel } from "@/components/pdf-station/merge-pages-panel";
+import { SignaturePanel } from "@/components/pdf-station/signature-panel";
 import { toHindiDigits } from "@/lib/arabic";
 import { useI18n, toolKey } from "@/lib/i18n";
 import { toast } from "sonner";
@@ -144,6 +145,27 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
       <path d="m8.5 13.5 7 5M15.5 13.5l-7 5" />
     </>
   ),
+  sign: svg(
+    <>
+      <path d="M3 17c3 0 4.5-2.5 5.5-5 1-2.4 2-4 3-4s.8 2.2 0 4.5c-.9 2.6-.6 4.5 1.5 4.5s3.5-2 4-4.5" />
+      <path d="M17.5 4.5 19.5 2.5 21.5 4.5 19.5 6.5Z" />
+      <path d="M3 21h18" />
+    </>
+  ),
+  protect: svg(
+    <>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+      <circle cx="12" cy="16" r="1.6" fill="currentColor" stroke="none" />
+    </>
+  ),
+  unlock: svg(
+    <>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 7.8-1.2" />
+      <circle cx="12" cy="16" r="1.6" fill="currentColor" stroke="none" />
+    </>
+  ),
 };
 
 const TOOLBAR: { id: OpId | "editor" | "cad_viewer"; label: string }[] = [
@@ -160,6 +182,9 @@ const TOOLBAR: { id: OpId | "editor" | "cad_viewer"; label: string }[] = [
   { id: "page_numbers", label: "ترقيم" },
   { id: "watermark", label: "ختم" },
   { id: "remove_watermark", label: "بدون علامة" },
+  { id: "sign", label: "توقيع" },
+  { id: "protect", label: "قفل" },
+  { id: "unlock", label: "فتح قفل" },
   { id: "pdf_to_images", label: "لصور" },
   { id: "images_to_pdf", label: "من صور" },
   { id: "image_convert", label: "صيغة" },
@@ -192,6 +217,9 @@ const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
   ocr: { verb: "اقرأ النص الممسوح" },
   pdf_to_word: { verb: "حوّل لـ Word" },
   pdf_to_excel: { verb: "حوّل لـ Excel" },
+  sign: { verb: "ثبّت التوقيع" },
+  protect: { verb: "اقفل الملف" },
+  unlock: { verb: "افتح القفل" },
 };
 
 /* الأدوات التي تعمل على صفحات محددة — زرّها يعرض عدد الصفحات المختارة */
@@ -351,9 +379,10 @@ export function Workbench() {
     activeFile?.kind === "pdf" || activeFile?.kind === "image";
   const cadEnabled = activeFile?.kind === "cad";
 
-  /* وضع الفصل البصري بعمودين + وضع دمج الصفحات من عدة ملفات (المرحلة 3) */
+  /* وضع الفصل البصري بعمودين + وضع دمج الصفحات من عدة ملفات (المرحلة 3) + التوقيع */
   const splitMode = tool === "split" && activeFile?.kind === "pdf";
   const mergePagesMode = tool === "merge_pages";
+  const signMode = tool === "sign" && activeFile?.kind === "pdf";
 
   const pickTool = (id: OpId) => {
     setTool(id);
@@ -440,6 +469,13 @@ export function Workbench() {
     addEditorResult(name, blob);
     setEditing(false);
     toast.success(t("ed.savedToast"));
+  };
+
+  /* نتيجة التوقيع: تُضاف للنتائج وتصير ملف العمل النشط — لتكمل التواقيع على النسخة الأخيرة */
+  const signApplied = async (name: string, blob: Blob) => {
+    appendResult(name, blob, "sign");
+    const newId = await addResultAsFile(name, blob);
+    setActiveId(newId);
   };
 
   /* اسم زرّ الأداة السياقي: الفعل + عدد الصفحات المختارة إن وُجد */
@@ -610,8 +646,9 @@ export function Workbench() {
                     }
                     if (ok) {
                       setEditing(false);
-                      /* النقر على «فصل» أو «دمج صفحات» وهي مفتوحة يغلقها */
-                      if ((id === "split" || id === "merge_pages") && tool === id) setTool(null);
+                      /* النقر على «فصل» أو «دمج صفحات» أو «توقيع» وهي مفتوحة يغلقها */
+                      if ((id === "split" || id === "merge_pages" || id === "sign") && tool === id)
+                        setTool(null);
                       else pickTool(id as OpId);
                     } else hintDisabled(id as OpId);
                   }}
@@ -724,6 +761,18 @@ export function Workbench() {
                 <MergePagesPanel
                   files={files.filter((f) => f.kind === "pdf")}
                   onClose={() => setTool(null)}
+                />
+              </div>
+            ) : signMode ? (
+              <div className="lg:col-span-2">
+                <SignaturePanel
+                  file={activeFile.file}
+                  fileName={activeFile.name}
+                  page={page}
+                  pages={activeFile.pages ?? 1}
+                  onPage={setPage}
+                  onClose={() => setTool(null)}
+                  onApplied={signApplied}
                 />
               </div>
             ) : (
@@ -876,7 +925,7 @@ export function Workbench() {
             )}
 
             {/* الجوال — شريط الصفحات الأفقي بأزرار الأفعال السريعة (الرِيل المخفي تحت 1024px) */}
-            {activeFile?.kind === "pdf" && !editing && !splitMode && !mergePagesMode && (
+            {activeFile?.kind === "pdf" && !editing && !splitMode && !mergePagesMode && !signMode && (
               <div className="lg:hidden">
                 <p className="px-1 pb-1.5 text-[11px] font-bold text-muted-foreground">
                   {t("ws.pagesHint")}
@@ -944,8 +993,8 @@ export function Workbench() {
             )}
           </div>
 
-          {/* ─── الشريط السفلي: قسم الأداة + زرّها السياقي + اسم النتيجة (يُخفى أثناء التعديل والفصل) ─── */}
-          {!editing && !splitMode && !mergePagesMode && (
+          {/* ─── الشريط السفلي: قسم الأداة + زرّها السياقي + اسم النتيجة (يُخفى أثناء التعديل والفصل والتوقيع) ─── */}
+          {!editing && !splitMode && !mergePagesMode && !signMode && (
             <>
               <div
                 ref={bottomBarRef}
@@ -995,6 +1044,16 @@ export function Workbench() {
                           </option>
                         ))}
                       </select>
+                    ) : f.type === "password" ? (
+                      <input
+                        type="password"
+                        value={params[f.key] ?? ""}
+                        onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+                        placeholder={f.placeholder}
+                        autoComplete="new-password"
+                        data-testid={`field-${f.key}`}
+                        className="w-44 rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold placeholder:font-normal placeholder:text-muted-foreground/60"
+                      />
                     ) : (
                       <input
                         value={params[f.key] ?? ""}

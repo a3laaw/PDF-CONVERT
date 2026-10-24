@@ -462,6 +462,46 @@ export const TOOLS: ToolDef[] = [
     outName: "بعد-تعديل-البيانات.pdf",
   },
   {
+    id: "sign",
+    name: "التوقيع الإلكتروني",
+    desc: "ارسم توقيعك بإيدك أو اكتبه، وانقر على الصفحة ليُثبّت مكانه وبالحجم الذي تريد",
+    category: "إضافات",
+    emoji: "✍️",
+    keywords: ["توقيع", "وقّع", "امضا", "امضاء", "توقيع الكتروني", "وقع الملف", "signature"],
+    accepts: ["pdf"],
+    fields: [],
+    outName: "بعد-التوقيع.pdf",
+    promo: true,
+  },
+  {
+    id: "protect",
+    name: "قفل بكلمة سر",
+    desc: "امنع أي حد يفتح ملفك من غير كلمة سر — تشفير قوي AES-256 داخل متصفحك",
+    category: "حماية",
+    emoji: "🔒",
+    keywords: ["قفل", "حماية", "باسورد", "كلمة سر", "تشفير", "اقفل", "password", "protect"],
+    accepts: ["pdf"],
+    fields: [
+      { key: "password", label: "كلمة السر", type: "password", default: "", placeholder: "اكتب كلمة سر قوية" },
+    ],
+    outName: "مقفول-بكلمة-سر.pdf",
+    promo: true,
+  },
+  {
+    id: "unlock",
+    name: "فتح قفل كلمة السر",
+    desc: "معك كلمة السر؟ افك القفل وارجع الملف مفتوحًا للطباعة والتعديل",
+    category: "حماية",
+    emoji: "🔓",
+    keywords: ["فك القفل", "افتح القفل", "ازالة كلمة السر", "فك التشفير", "unlock", "بدون باسورد"],
+    accepts: ["pdf"],
+    fields: [
+      { key: "password", label: "كلمة سر الملف", type: "password", default: "", placeholder: "كلمة سر الملف المقفول" },
+    ],
+    outName: "بعد-فتح-القفل.pdf",
+    promo: true,
+  },
+  {
     id: "nup",
     name: "عدة صفحات في الورقة",
     desc: "اطبع بذكاء: صفحتان جنبًا إلى جنب في ورقة واحدة — توفير للورق",
@@ -486,4 +526,4 @@ export const TOOLS_BY_ID: Record<OpId, ToolDef> = Object.fromEntries(
   TOOLS.map((t) => [t.id, t])
 ) as Record<OpId, ToolDef>;
 
-export const CATEGORIES = ["الكل", "تنظيم", "الحجم", "إضافات", "تحويل", "بيانات"] as const;
+export const CATEGORIES = ["الكل", "تنظيم", "الحجم", "إضافات", "تحويل", "بيانات", "حماية"] as const;

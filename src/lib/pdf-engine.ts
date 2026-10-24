@@ -6,6 +6,7 @@ import { toHindiDigits } from "./arabic";
 import { parsePageRanges } from "./interpreter";
 import { resultName, stripExt } from "./naming";
 import { collectOfficeDoc, buildDocx, buildXlsx } from "./to-office";
+import { protectPdf, unlockPdf } from "./qpdf";
 import type { ResultFile } from "./types";
 
 /* ─────────── أدوات داخلية ─────────── */
@@ -401,6 +402,12 @@ export async function runOp(
       return opToOffice(inputs, "word", label, ctx);
     case "pdf_to_excel":
       return opToOffice(inputs, "excel", label, ctx);
+    case "protect":
+      return opProtectUnlock(inputs, params, "protect", label, ctx);
+    case "unlock":
+      return opProtectUnlock(inputs, params, "unlock", label, ctx);
+    case "sign":
+      throw new Error("أداة التوقيع بصرية — افتحها من الشريط وضع توقيعك على الصفحة");
     default:
       throw new Error("عملية غير معروفة");
   }
@@ -1120,6 +1127,29 @@ async function opMetadata(
     doc.setProducer("محوّل PDF");
     const saved = await doc.save({ useObjectStreams: true });
     results.push(resultFile(resultName("metadata", input.name), saved, label, "pdf"));
+  }
+  return results;
+}
+
+/* قفل/فتح القفل بكلمة سر — qpdf-wasm داخل المتصفح */
+async function opProtectUnlock(
+  inputs: EngineInput[],
+  params: Record<string, string>,
+  mode: "protect" | "unlock",
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile[]> {
+  const results: ResultFile[] = [];
+  for (const input of inputs) {
+    ctx.onProgress?.(
+      mode === "protect" ? `جارٍ قفل «${input.name}»…` : `جارٍ فتح قفل «${input.name}»…`
+    );
+    const bytes = await bytesOf(input);
+    const out =
+      mode === "protect"
+        ? await protectPdf(bytes, (params.password ?? "").trim())
+        : await unlockPdf(bytes, params.password ?? "");
+    results.push(resultFile(resultName(mode, input.name), out, label, "pdf"));
   }
   return results;
 }
