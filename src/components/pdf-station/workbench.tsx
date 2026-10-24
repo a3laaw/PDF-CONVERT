@@ -8,6 +8,7 @@ import { useWorkspace } from "@/store/workspace";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
 import { downloadBlob, openBlobInNewTab, pdfPageThumbs } from "@/lib/pdf-engine";
+import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
 import { toHindiDigits } from "@/lib/arabic";
 import { toast } from "sonner";
 import type { FileKind, OpId, ResultFile } from "@/lib/types";
@@ -31,6 +32,9 @@ const svg = (paths: React.ReactNode) => (
 );
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
+  editor: svg(
+    <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+  ),
   compress: svg(<path d="M4 9h16M4 15h10M9 4l-4 5 4 5" />),
   merge: svg(
     <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
@@ -88,7 +92,8 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   ),
 };
 
-const TOOLBAR: { id: OpId; label: string }[] = [
+const TOOLBAR: { id: OpId | "editor"; label: string }[] = [
+  { id: "editor", label: "تعديل" },
   { id: "compress", label: "تصغير" },
   { id: "merge", label: "دمج" },
   { id: "split", label: "فصل" },
@@ -148,6 +153,7 @@ export function Workbench() {
   const renameResult = useWorkspace((s) => s.renameResult);
   const clearResults = useWorkspace((s) => s.clearResults);
   const downloadAll = useWorkspace((s) => s.downloadAll);
+  const addEditorResult = useWorkspace((s) => s.addEditorResult);
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [selFiles, setSelFiles] = useState<Set<string> | null>(null);
@@ -159,6 +165,7 @@ export function Workbench() {
 
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const thumbsReq = useRef<Set<string>>(new Set());
 
@@ -203,6 +210,9 @@ export function Workbench() {
     };
   }, [activeFile, page, previewKey]);
   const preview = previewState && previewState.key === previewKey ? previewState.url : "";
+
+  const editorEnabled =
+    activeFile?.kind === "pdf" || activeFile?.kind === "image";
 
   const pickTool = (id: OpId) => {
     setTool(id);
@@ -268,6 +278,12 @@ export function Workbench() {
     else if (activeFile && activeFile.kind !== "pdf")
       toast.info("ندعم ملفات PDF والصور فقط حاليًا — أنواع أخرى غير مدعومة بعد");
     else toast.info("حدّد ملف PDF من قائمة الملفات أولًا");
+  };
+
+  const editorSave = (name: string, blob: Blob) => {
+    addEditorResult(name, blob);
+    setEditing(false);
+    toast.success("حُفظت التعديلات — الملف جاهز للتنزيل");
   };
 
   const execute = async () => {
@@ -363,14 +379,28 @@ export function Workbench() {
           {/* ─── شريط الأدوات ─── */}
           <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
             {TOOLBAR.map(({ id, label }) => {
-              const ok = toolEnabled(id);
+              const isEditor = id === "editor";
+              const ok = isEditor ? editorEnabled : toolEnabled(id);
+              const active = isEditor ? editing : tool === id;
               return (
                 <button
                   key={id}
-                  onClick={() => (ok ? pickTool(id) : hintDisabled(id))}
+                  onClick={() => {
+                    if (isEditor) {
+                      if (ok) {
+                        setTool(null);
+                        setEditing(true);
+                      } else toast.info("حدّد ملف PDF أو صورة من قائمة الملفات أولًا");
+                      return;
+                    }
+                    if (ok) {
+                      setEditing(false);
+                      pickTool(id);
+                    } else hintDisabled(id);
+                  }}
                   className={cn(
                     "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
-                    tool === id
+                    active
                       ? "bg-primary/10 text-primary outline outline-1 outline-primary/30"
                       : ok
                         ? "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -500,41 +530,58 @@ export function Workbench() {
             </div>
 
             <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-border bg-slate-50 p-4">
-              {preview ? (
-                <img
-                  src={preview}
-                  alt="معاينة الملف"
-                  className="max-h-[560px] max-w-full rounded-md bg-white shadow-xl shadow-black/10"
+              {editing && activeFile ? (
+                <EditorCanvas
+                  fileName={activeFile.name}
+                  kind={activeFile.kind === "image" ? "image" : "pdf"}
+                  file={activeFile.file}
+                  page={page}
+                  pages={activeFile.pages ?? 1}
+                  onPage={setPage}
+                  onClose={() => setEditing(false)}
+                  onSave={editorSave}
                 />
               ) : (
-                <div className="size-64 max-w-full animate-pulse rounded-md bg-white shadow-lg" />
-              )}
-              {activeFile?.kind === "pdf" && (activeFile.pages ?? 0) > 1 && (
-                <div className="mt-4 flex items-center gap-3">
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    aria-label="الصفحة السابقة"
-                    className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
-                  >
-                    ›
-                  </button>
-                  <span className="text-sm font-extrabold text-muted-foreground">
-                    {toHindiDigits(page)} / {toHindiDigits(activeFile.pages ?? 1)}
-                  </span>
-                  <button
-                    onClick={() => setPage((p) => Math.min(activeFile.pages ?? 1, p + 1))}
-                    aria-label="الصفحة التالية"
-                    className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
-                  >
-                    ‹
-                  </button>
-                </div>
+                <>
+                  {preview ? (
+                    <img
+                      src={preview}
+                      alt="معاينة الملف"
+                      className="max-h-[560px] max-w-full rounded-md bg-white shadow-xl shadow-black/10"
+                    />
+                  ) : (
+                    <div className="size-64 max-w-full animate-pulse rounded-md bg-white shadow-lg" />
+                  )}
+                  {activeFile?.kind === "pdf" && (activeFile.pages ?? 0) > 1 && (
+                    <div className="mt-4 flex items-center gap-3">
+                      <button
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        aria-label="الصفحة السابقة"
+                        className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
+                      >
+                        ›
+                      </button>
+                      <span className="text-sm font-extrabold text-muted-foreground">
+                        {toHindiDigits(page)} / {toHindiDigits(activeFile.pages ?? 1)}
+                      </span>
+                      <button
+                        onClick={() => setPage((p) => Math.min(activeFile.pages ?? 1, p + 1))}
+                        aria-label="الصفحة التالية"
+                        className="grid size-8 place-items-center rounded-lg border border-border bg-white text-lg font-extrabold text-muted-foreground"
+                      >
+                        ‹
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
 
-          {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة ─── */}
-          <div className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm">
+          {/* ─── الشريط السفلي: خيارات + نفّذ + اسم النتيجة (يُخفى أثناء التعديل) ─── */}
+          {!editing && (
+            <>
+              <div className="mt-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-3 shadow-sm">
             {tool === "remove_watermark" && (
               <span className="w-full text-[10px] text-muted-foreground">
                 هذه الأداة تعالج الملف على الخادم ويُحذف فور انتهاء التنفيذ — والعلامات المرسومة داخل صور قد لا تُحذف
@@ -595,6 +642,8 @@ export function Workbench() {
               </div>
               <p className="mt-1 text-[11px] font-bold text-muted-foreground">{runMessage}</p>
             </div>
+          )}
+            </>
           )}
         </>
       )}

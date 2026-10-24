@@ -298,3 +298,23 @@ Stage Summary:
 - 站点正式收缩为「PDF + 图片」单一工作区：13 个工具（تصغير/دمج/فصل/استخراج/حذف/تدوير/ترتيب/ترقيم/ختم/بدون علامة/لصور/من صور/نص）+ nup/metadata 在目录中。
 - CAD 代码从 UI 与 API 层完全退场；引擎层保留以备未来快速回归。
 - 下一步方向（用户已点名 «التعديل عليهما»）：PDF/图片编辑层——P0 的预览编辑（Overlay Canvas+撤销）、水印图像检测器、OCR 阿语基准。
+
+---
+Task ID: 24
+Agent: main (Z.ai)
+Task: 用户批准「ابدا」— 构建直接编辑层（طبقة التعديل المباشر）：在预览上直接对 PDF 页面/图片绘制·高亮·形状·阿语文本，带撤销/重做，保存后烙印产出新文件。
+
+Work Log:
+- 架构决策（与 pdf-engine 现有 ArabicTextPng 同哲学）：注释层=Canvas 矢量绘制→保存时按目标分辨率重渲染为透明 PNG→pdf-lib embedPng 盖印整页（PDF）或直接合成（图片）。注释坐标归一化 0..1、粗细/字号以「页高千分比(‰)」存储 → 任意分辨率渲染形状一致。文字经浏览器 canvas（direction=rtl + Tajawal 字体族）→ 阿语整形完美（所见即所得）。
+- 新建 src/components/pdf-station/editor-canvas.tsx（~530行）：7工具（قلم/تظليل/خط/سهم/مستطيل/دائرة/نص）+4色（黑红蓝绿，高亮固定黄0.42α）+3粗细（文本工具时换3字号）+撤销/重做（doc={annos,past,future} 单一原子状态，StrictMode 安全，深度40）+清空本页+PDF逐页注释存储（annos[pageIndex]）+编辑器内翻页（联动 workbench page 状态/缩略图高亮）+文本就地输入框（Enter提交/Esc取消）。指针事件 pointer capture + touch-action:none → 桌面/触屏一致。
+- 保存链路：PDF=pdf-lib load(ignoreEncryption)+pdfjs 逐注释页重渲染（targetW=min(2400,max(1400,v1.width*2.2))）→toBlob png→embedPng→drawImage 覆盖整页；未注释页原样保留。图片=合成 base(白底)+注释层→PNG（≤2600px）。输出名：«原名 (معدّل).pdf/png»。
+- store：新增 addEditorResult(name,blob)（revocation 旧 URL、kind 推断、runState=done）复用现有结果卡 UI（重命名/下载）。
+- workbench：TOOLBAR 首位新增 «تعديل» 按钮（editor 图标，pdf/image 启用）；编辑态替换大预览区为 EditorCanvas 并隐藏底部参数条；editorSave 回调→addEditorResult+关闭编辑器+toast。
+- E2E 真实浏览器（桌面 1280px，merged.pdf 3页）：打开编辑器→鼠标画 pen 折线→tظليل 黄色高亮→红色矩形→نص 工具点画布→输入 «ملاحظة مهمة للمراجعة»→Enter→文字以正确整形 RTL 呈现（截图20/21）→撤销（文字消失，截图22）→重做恢复→حفظ التعديلات→结果卡 «merged (معدّل).pdf» 75KB→下载→fitz 验证：3页、仅第1页新增1张覆盖图（原页2/3自身图像不变），第1页渲染图中高亮/笔迹/红框/阿语文本全部烙印正确（23_result_page1.png）。
+- E2E 移动端 390x844 + 图片：上传 chain-check.png→تعديل→画笔→保存→«chain-check (معدّل).png» 206KB 下载，渲染确认笔迹烙印于原图上（截图24）。
+- 校验：tsc src/ 零错误；eslint 三文件全绿。已知边界（UI 已注明）：注释为盖印位图（文字不可再选中/搜索），未注释页不受影响。
+
+Stage Summary:
+- «تعديل» 成为第14个工具按钮，第一个真正意义的编辑层：预览即画布、保存即成品，全程浏览器本地零上传。
+- 为后续能力铺路：签名（笔迹保存复用）、图片水印涂抹覆盖、文档批注导出。
+- 证据：scripts/t_out/e2e/2{0,1,2,3,4}_*.png + /home/z/Downloads/{merged (معدّل).pdf, chain-check (معدّل).png}。

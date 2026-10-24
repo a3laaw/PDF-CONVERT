@@ -68,6 +68,7 @@ interface WorkspaceState {
 
   run: () => Promise<void>;
   runOnFiles: (op: OpId, params: Record<string, string>, fileIds: string[]) => Promise<void>;
+  addEditorResult: (name: string, blob: Blob) => void;
   renameResult: (id: string, name: string) => void;
   clearResults: () => void;
   downloadAll: () => Promise<void>;
@@ -339,6 +340,27 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const msg = e instanceof Error ? e.message : "حدث خطأ غير متوقع أثناء التنفيذ";
       set({ runState: "error", runMessage: msg });
     }
+  },
+
+  /* ناتج طبقة التعديل المباشر — ملف واحد جاهز بدون مرور بالأدوات */
+  addEditorResult: (name, blob) => {
+    get().results.forEach((r) => URL.revokeObjectURL(r.url));
+    set({
+      results: [
+        {
+          id: nanoid(),
+          name,
+          blob,
+          url: URL.createObjectURL(blob),
+          size: blob.size,
+          fromStep: "editor",
+          kind: blob.type.includes("pdf") ? "pdf" : "image",
+        },
+      ],
+      runState: "done",
+      runMessage: "تم! ملف جاهز",
+      runProgress: 1,
+    });
   },
 
   renameResult: (id, name) =>
