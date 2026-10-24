@@ -17,7 +17,10 @@ export type OpId =
   | "pdf_to_images"
   | "extract_text"
   | "metadata"
-  | "nup";
+  | "nup"
+  | "image_convert"
+  | "image_resize"
+  | "image_crop";
 
 /** ملف داخل مساحة العمل */
 export interface WorkspaceFile {

@@ -85,6 +85,22 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
       <path d="M3 15l4-4 4 4 5-6 5 6" />
     </>
   ),
+  image_convert: svg(
+    <>
+      <path d="M20 5H7l3 3M4 19h13l-3-3" />
+    </>
+  ),
+  image_resize: svg(
+    <>
+      <path d="M15 3h6v6M9 21H3v-6M21 3l-8 8M3 21l8-8" />
+    </>
+  ),
+  image_crop: svg(
+    <>
+      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+      <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+    </>
+  ),
   extract_text: svg(
     <>
       <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
@@ -107,6 +123,9 @@ const TOOLBAR: { id: OpId | "editor"; label: string }[] = [
   { id: "remove_watermark", label: "بدون علامة" },
   { id: "pdf_to_images", label: "لصور" },
   { id: "images_to_pdf", label: "من صور" },
+  { id: "image_convert", label: "صيغة" },
+  { id: "image_resize", label: "أبعاد" },
+  { id: "image_crop", label: "قص" },
   { id: "extract_text", label: "نص" },
 ];
 
@@ -123,6 +142,9 @@ const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
   remove_watermark: { verb: "نظّف العلامات" },
   pdf_to_images: { verb: "حوّل لصور" },
   images_to_pdf: { verb: "اعمل PDF من الصور" },
+  image_convert: { verb: "حوّل الصيغة" },
+  image_resize: { verb: "غيّر الأبعاد" },
+  image_crop: { verb: "اقتصّ الصورة" },
   extract_text: { verb: "استخرج النص" },
 };
 
@@ -355,7 +377,12 @@ export function Workbench() {
 
   /* اسم زرّ الأداة السياقي: الفعل العربي + عدد الصفحات المختارة إن وُجد */
   const actionLabel = (id: OpId): string => {
-    const verb = TOOL_ACTION[id]?.verb ?? "نفّذ";
+    let verb = TOOL_ACTION[id]?.verb ?? "نفّذ";
+    /* التدوير والتصغير مشتركان بين PDF والصور — الفعل يتبع نوع الملف النشط المعروض */
+    if (activeFile?.kind === "image") {
+      if (id === "rotate") verb = "دوّر/اقلب الصورة";
+      if (id === "compress") verb = "صغّر حجم الصورة";
+    }
     if (PAGES_TOOLS.includes(id) && selPages.length > 0)
       return `${verb} (${pagesLabel(selPages.length)})`;
     return verb;
@@ -538,6 +565,8 @@ export function Workbench() {
                       setActiveId(f.id);
                       setPage(1);
                       setSelPages([]);
+                      /* النقر على الكارت = هذا هو ملف العمل — يفضّل تحديدًا قديمًا عالقًا */
+                      setSelFiles(null);
                     }}
                     className={cn(
                       "relative flex cursor-pointer items-center gap-2 rounded-xl border p-2",
@@ -854,7 +883,7 @@ export function Workbench() {
             ) : (
               <span className="px-1 text-xs font-bold text-muted-foreground">
                 {activeFile?.kind === "image"
-                  ? "الصور تتحول إلى PDF بأداة «من صور» — ادخل على القسم وسيظهر زرّها"
+                  ? "صورتك جاهزة: تصغير الحجم، تدوير وقلب، قص، صيغة، أبعاد، من صور — اختر من الشريط وسيظهر زرّها"
                   : activeFile && activeFile.kind !== "pdf"
                     ? "هذا النوع غير مدعوم حاليًا — PDF والصور فقط"
                     : "اختر أداة من الشريط وسيظهر زرّها هنا"}

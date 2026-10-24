@@ -1,6 +1,6 @@
 import type { ToolDef, OpId } from "./types";
 
-/** كتالوج أدوات «محطّة PDF» — 14 أداة بلغة السوق */
+/** كتالوج أدوات «محطّة PDF» — 17 أداة بلغة السوق */
 export const TOOLS: ToolDef[] = [
   {
     id: "merge",
@@ -16,11 +16,11 @@ export const TOOLS: ToolDef[] = [
   {
     id: "compress",
     name: "تصغير الحجم",
-    desc: "قلّل حجم الملف بثلاثة مستويات: خفيف، متوسط، قوي",
+    desc: "قلّل حجم الملف أو الصورة بثلاثة مستويات: خفيف، متوسط، قوي",
     category: "الحجم",
     emoji: "🗜️",
-    keywords: ["صغر الحجم", "صغر", "ضغط", "اضغط", "خفف الحجم", "اصغر", "حجم اقل", "اصغر الحجم", "قلل الحجم", "خفف"],
-    accepts: ["pdf"],
+    keywords: ["صغر الحجم", "صغر", "ضغط", "اضغط", "خفف الحجم", "اصغر", "حجم اقل", "اصغر الحجم", "قلل الحجم", "خفف", "صغر الصورة", "ضغط الصورة", "خفف الصورة"],
+    accepts: ["pdf", "image"],
     fields: [
       {
         key: "level",
@@ -78,12 +78,12 @@ export const TOOLS: ToolDef[] = [
   },
   {
     id: "rotate",
-    name: "تدوير الصفحات",
-    desc: "لفّ الصفحات يمينًا أو يسارًا أو اقلبها بالكامل",
+    name: "تدوير",
+    desc: "لفّ الصفحات أو الصور يمينًا أو يسارًا — واقلب الصور أفقيًا أو رأسيًا",
     category: "تنظيم",
     emoji: "🔄",
-    keywords: ["دور", "لف", "اقلب", "مدور", "تدوير", "لف الصفحات", "دور الصفحات", "عدل اتجاه"],
-    accepts: ["pdf"],
+    keywords: ["دور", "لف", "اقلب", "مدور", "تدوير", "لف الصفحات", "دور الصفحات", "عدل اتجاه", "اقلب الصورة", "قلب الصورة", "دور الصورة", "مدور الصورة"],
+    accepts: ["pdf", "image"],
     fields: [
       {
         key: "angle",
@@ -94,6 +94,8 @@ export const TOOLS: ToolDef[] = [
           { value: "90", label: "90° — ربع دورة يمينًا" },
           { value: "180", label: "180° — نصف دورة (قلب)" },
           { value: "270", label: "270° — ربع دورة يسارًا" },
+          { value: "flipH", label: "قلب أفقي — للصور (مرآة)" },
+          { value: "flipV", label: "قلب رأسي — للصور" },
         ],
       },
       {
@@ -223,10 +225,10 @@ export const TOOLS: ToolDef[] = [
   {
     id: "images_to_pdf",
     name: "صور إلى PDF",
-    desc: "حوّل صورك إلى مستند PDF واحد مرتّب",
+    desc: "حوّل صورك إلى PDF: ملف واحد مرتّب أو ملف منفصل لكل صورة",
     category: "تحويل",
     emoji: "🖼️",
-    keywords: ["صور الى pdf", "حول الصور", "حوّل الصور", "الصور ملف", "اجمع الصور", "صورة الى pdf"],
+    keywords: ["صور الى pdf", "حول الصور", "حوّل الصور", "الصور ملف", "اجمع الصور", "صورة الى pdf", "كل صورة pdf"],
     accepts: ["image"],
     fields: [
       {
@@ -239,8 +241,100 @@ export const TOOLS: ToolDef[] = [
           { value: "A4", label: "ورقة A4 — الصورة داخلها" },
         ],
       },
+      {
+        key: "grouping",
+        label: "التجميع",
+        type: "select",
+        default: "ملف واحد",
+        options: [
+          { value: "ملف واحد", label: "ملف واحد — كل الصور مرتّبة" },
+          { value: "ملف لكل صورة", label: "ملف PDF لكل صورة" },
+        ],
+      },
     ],
     outName: "من-الصور.pdf",
+  },
+  {
+    id: "image_convert",
+    name: "تحويل صيغة الصورة",
+    desc: "حوّل بين PNG وJPG وWebP — واختر جودة الإخراج",
+    category: "تحويل",
+    emoji: "🔁",
+    keywords: ["صيغة", "حول الصورة", "png", "jpg", "jpeg", "webp", "غيّر الصيغة", "تحويل صيغة", "صيغة الصورة"],
+    accepts: ["image"],
+    fields: [
+      {
+        key: "format",
+        label: "الصيغة الجديدة",
+        type: "select",
+        default: "jpeg",
+        options: [
+          { value: "jpeg", label: "JPG — الأنسب للصور والكاميرا" },
+          { value: "png", label: "PNG — شفافية وأعلى جودة" },
+          { value: "webp", label: "WebP — الأصغر بجودة عالية" },
+        ],
+      },
+      {
+        key: "quality",
+        label: "الجودة",
+        type: "select",
+        default: "متوازنة",
+        options: [
+          { value: "عالية", label: "عالية" },
+          { value: "متوازنة", label: "متوازنة" },
+          { value: "مضغوطة", label: "مضغوطة" },
+        ],
+      },
+    ],
+    outName: "بعد-الصيغة.jpg",
+    promo: true,
+  },
+  {
+    id: "image_resize",
+    name: "تغيير أبعاد الصورة",
+    desc: "صغّر أو كبّر بالنسبة المئوية أو اضبط العرض بالبكسل — النسبة محفوظة",
+    category: "الحجم",
+    emoji: "📐",
+    keywords: ["أبعاد", "مقاس", "أبعاد الصورة", "مقاس الصورة", "صغر مقاس", "كبر مقاس", "resize", "عرض الصورة"],
+    accepts: ["image"],
+    fields: [
+      {
+        key: "value",
+        label: "المقاس الجديد",
+        type: "text",
+        default: "50%",
+        placeholder: "مثال: 50% أو 800",
+      },
+    ],
+    outName: "بعد-الأبعاد.png",
+    promo: true,
+  },
+  {
+    id: "image_crop",
+    name: "قص الصورة",
+    desc: "اقتصّ الصورة بنسبة جاهزة: مربع، 4:3، 16:9، أو A4 — قص مركزي نظيف",
+    category: "تنظيم",
+    emoji: "✂️",
+    keywords: ["قص", "اقتصاص", "قص الصورة", "قطع الصورة", "مربع", "اقتص", "كروب"],
+    accepts: ["image"],
+    fields: [
+      {
+        key: "ratio",
+        label: "نسبة القص",
+        type: "select",
+        default: "1:1",
+        options: [
+          { value: "1:1", label: "مربع 1:1 — للبروفايل والسوشال" },
+          { value: "4:3", label: "عرضي 4:3" },
+          { value: "3:4", label: "طولي 3:4" },
+          { value: "16:9", label: "سينمائي 16:9" },
+          { value: "A4طولي", label: "A4 طولي — للمستندات" },
+          { value: "A4عرضي", label: "A4 عرضي" },
+        ],
+      },
+    ],
+    outName: "بعد-القص.png",
+    promo: true,
   },
   {
     id: "pdf_to_images",

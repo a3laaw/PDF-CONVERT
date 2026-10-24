@@ -89,6 +89,254 @@ async function bytesOf(input: EngineInput): Promise<Uint8Array> {
   return new Uint8Array(await input.file.arrayBuffer());
 }
 
+/* ─────────── محرك الصور — Canvas داخل المتصفح، بلا خادم ─────────── */
+
+const IMG_EXTS = /\.(png|jpe?g|webp|gif|bmp)$/i;
+
+/** فتح الصورة كـ ImageBitmap — يدعم PNG وJPG وWebP وBMP وأول إطار من GIF */
+async function loadBitmap(file: File | Blob): Promise<ImageBitmap> {
+  try {
+    return await createImageBitmap(file);
+  } catch {
+    throw new Error("تعذر قراءة الصورة — الصيغ المدعومة: PNG وJPG وWebP وBMP وGIF");
+  }
+}
+
+/** كانفس بالأبعاد الأصلية يحوي الصورة مرسومة */
+function canvasFromBitmap(bm: ImageBitmap, w = bm.width, h = bm.height): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  c.getContext("2d")!.drawImage(bm, 0, 0, c.width, c.height);
+  return c;
+}
+
+/** ملء الخلفية بيضاء (الشفافية تُستبدل — لصيغ لا تدعم الشفافية مثل JPG) */
+function fillWhite(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext("2d")!;
+  ctx.globalCompositeOperation = "destination-over";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = "source-over";
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Blob> {
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("تعذر إنشاء الصورة"))), mime, quality)
+  );
+}
+
+/** تصدير بأول صيغة يدعمها المتصفح فعليًا — المتصفحات لا تدعم كل الصيغ */
+async function exportCanvas(
+  canvas: HTMLCanvasElement,
+  mimes: string[],
+  quality?: number
+): Promise<{ blob: Blob; ext: string; mime: string }> {
+  for (const m of mimes) {
+    const blob = await canvasToBlob(canvas, m, quality);
+    if (blob.type === m) {
+      const ext = m === "image/png" ? "png" : m === "image/jpeg" ? "jpg" : "webp";
+      return { blob, ext, mime: m };
+    }
+  }
+  throw new Error("المتصفح لا يدعم صيغة الإخراج المطلوبة — جرّب PNG أو JPG");
+}
+
+const CONVERT_QUALITY: Record<string, number> = { عالية: 0.92, متوازنة: 0.8, مضغوطة: 0.6 };
+const COMPRESS_QUALITY: Record<string, number> = { خفيف: 0.85, متوسط: 0.72, قوي: 0.55 };
+
+/** تحويل صيغة صورة واحدة */
+async function imageConvertOne(
+  input: EngineInput,
+  params: Record<string, string>,
+  label: string
+): Promise<ResultFile> {
+  const format = params.format === "png" || params.format === "webp" ? params.format : "jpeg";
+  const mime = format === "png" ? "image/png" : format === "webp" ? "image/webp" : "image/jpeg";
+  const bm = await loadBitmap(input.file);
+  try {
+    const canvas = canvasFromBitmap(bm);
+    if (mime === "image/jpeg") fillWhite(canvas);
+    const q = mime === "image/png" ? undefined : CONVERT_QUALITY[params.quality ?? "متوازنة"] ?? 0.8;
+    const { blob } = await exportCanvas(canvas, [mime], q);
+    return resultFile(resultName("image_convert", input.name, 0, `.${format === "jpeg" ? "jpg" : format}`), blob, label, "image");
+  } finally {
+    bm.close();
+  }
+}
+
+/** تغيير أبعاد صورة واحدة — نسبة مئوية «50%» أو عرض بالبكسل «800» */
+async function imageResizeOne(
+  input: EngineInput,
+  params: Record<string, string>,
+  label: string
+): Promise<ResultFile> {
+  const raw = (params.value ?? "50%").trim();
+  const m = raw.match(/^(\d+(?:\.\d+)?)\s*%?$/);
+  if (!m) throw new Error("اكتب المقاس كنسبة مثل «50%» أو عرضًا بالبكسل مثل «800»");
+  const bm = await loadBitmap(input.file);
+  try {
+    let w: number;
+    let h: number;
+    if (raw.includes("%")) {
+      const pct = Math.min(400, Math.max(1, Number(m[1]))) / 100;
+      w = Math.max(1, Math.round(bm.width * pct));
+      h = Math.max(1, Math.round(bm.height * pct));
+    } else {
+      const target = Math.max(1, Math.round(Number(m[1])));
+      const scale = target / bm.width;
+      w = target;
+      h = Math.max(1, Math.round(bm.height * scale));
+    }
+    if (w === bm.width && h === bm.height) {
+      throw new Error("الصورة بهذه الأبعاد أصلًا — اكتب مقاسًا مختلفًا");
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    // إعادة الرسم بسلاسة
+    const ctx = canvas.getContext("2d")!;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bm, 0, 0, w, h);
+    const isPng = IMG_EXTS.test(input.name) && /\.png$/i.test(input.name);
+    const mimes = isPng ? ["image/png"] : ["image/jpeg", "image/png"];
+    if (!isPng) fillWhite(canvas);
+    const { blob, ext } = await exportCanvas(canvas, mimes, 0.9);
+    return resultFile(resultName("image_resize", input.name, 0, `.${ext}`), blob, label, "image");
+  } finally {
+    bm.close();
+  }
+}
+
+/** قص مركزي بنسبة أبعاد جاهزة */
+const CROP_RATIOS: Record<string, number> = {
+  "1:1": 1,
+  "4:3": 4 / 3,
+  "3:4": 3 / 4,
+  "16:9": 16 / 9,
+  "A4طولي": 210 / 297,
+  "A4عرضي": 297 / 210,
+};
+
+async function imageCropOne(
+  input: EngineInput,
+  params: Record<string, string>,
+  label: string
+): Promise<ResultFile> {
+  const ratio = CROP_RATIOS[params.ratio ?? "1:1"] ?? 1;
+  const bm = await loadBitmap(input.file);
+  try {
+    const srcAspect = bm.width / bm.height;
+    let w = bm.width;
+    let h = bm.height;
+    if (srcAspect > ratio) w = Math.round(bm.height * ratio); // المصدر أعرض — نقص العرض
+    else h = Math.round(bm.width / ratio); // المصدر أطول — نقص الارتفاع
+    if (w === bm.width && h === bm.height) {
+      throw new Error("الصورة بهذه النسبة أصلًا — لا حاجة للقص");
+    }
+    const x = Math.round((bm.width - w) / 2);
+    const y = Math.round((bm.height - h) / 2);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d")!.drawImage(bm, x, y, w, h, 0, 0, w, h);
+    const mimes = /\.png$/i.test(input.name) ? ["image/png"] : ["image/jpeg", "image/png"];
+    if (!mimes.includes("image/png")) fillWhite(canvas);
+    const { blob, ext } = await exportCanvas(canvas, mimes, 0.9);
+    return resultFile(resultName("image_crop", input.name, 0, `.${ext}`), blob, label, "image");
+  } finally {
+    bm.close();
+  }
+}
+
+/** تصغير حجم صورة واحدة — الصيغة تُختار بذكاء: WebP تحفظ الشفافية، JPG للعادية */
+async function imageCompressOne(
+  input: EngineInput,
+  params: Record<string, string>,
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile> {
+  const level = params.level ?? "متوسط";
+  const q = COMPRESS_QUALITY[level] ?? 0.72;
+  ctx.onProgress?.(`جارٍ تصغير حجم «${input.name}»…`);
+  const bm = await loadBitmap(input.file);
+  try {
+    const canvas = canvasFromBitmap(bm);
+    const jpg = /\.jpe?g$/i.test(input.name);
+    // الصور العادية تبقى JPG، وذات الشفافية تتحول WebP حفاظًا على الشفافية (وإن لم يتوفر فأبيض + JPG)
+    const mimes = jpg ? ["image/jpeg"] : ["image/webp", "image/jpeg"];
+    if (jpg) fillWhite(canvas);
+    let out = await exportCanvas(canvas, mimes, q);
+    if (!jpg && out.mime === "image/jpeg") {
+      // سقط الإخراج إلى JPG — الشفافية صارت سوداء، نعيد التصدير بخلفية بيضاء
+      fillWhite(canvas);
+      out = await exportCanvas(canvas, ["image/jpeg"], q);
+    }
+    return resultFile(resultName("compress", input.name, 0, `.${out.ext}`), out.blob, label, "image");
+  } finally {
+    bm.close();
+  }
+}
+
+/** تدوير/قلب صورة واحدة */
+async function imageRotateOne(
+  input: EngineInput,
+  angle: string,
+  label: string
+): Promise<ResultFile> {
+  const bm = await loadBitmap(input.file);
+  try {
+    const swap = angle === "90" || angle === "270";
+    const canvas = document.createElement("canvas");
+    canvas.width = swap ? bm.height : bm.width;
+    canvas.height = swap ? bm.width : bm.height;
+    const ctx = canvas.getContext("2d")!;
+    if (angle === "flipH") {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    } else if (angle === "flipV") {
+      ctx.translate(0, canvas.height);
+      ctx.scale(1, -1);
+    } else if (angle === "180") {
+      ctx.translate(canvas.width, canvas.height);
+      ctx.rotate(Math.PI);
+    } else if (angle === "270") {
+      ctx.translate(0, canvas.width);
+      ctx.rotate(-Math.PI / 2);
+    } else {
+      ctx.translate(canvas.height, 0);
+      ctx.rotate(Math.PI / 2);
+    }
+    ctx.drawImage(bm, 0, 0);
+    const mimes = /\.png$/i.test(input.name) ? ["image/png"] : ["image/jpeg", "image/png"];
+    if (!mimes.includes("image/png")) fillWhite(canvas);
+    const { blob, ext } = await exportCanvas(canvas, mimes, 0.92);
+    return resultFile(resultName("rotate", input.name, 0, `.${ext}`), blob, label, "image");
+  } finally {
+    bm.close();
+  }
+}
+
+/** تضمين أي صورة في PDF — png/jpg مباشرة، وwebp/gif/bmp عبر كانفس وسيط */
+async function embedAnyImage(doc: PDFDocument, input: EngineInput): Promise<import("pdf-lib").PDFImage> {
+  const bytes = await bytesOf(input);
+  const name = input.name.toLowerCase();
+  if (name.endsWith(".png")) return doc.embedPng(bytes);
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return doc.embedJpg(bytes);
+  // صيغ لا يفهمها pdf-lib — نمرر عبر كانفس إلى PNG
+  const bm = await loadBitmap(input.file);
+  try {
+    const canvas = canvasFromBitmap(bm);
+    fillWhite(canvas);
+    const pngBlob = await canvasToBlob(canvas, "image/png");
+    const pngBytes = new Uint8Array(await pngBlob.arrayBuffer());
+    return doc.embedPng(pngBytes);
+  } finally {
+    bm.close();
+  }
+}
+
 /* ─────────── العمليات ─────────── */
 
 export interface RunContext {
@@ -136,6 +384,12 @@ export async function runOp(
       return opMetadata(inputs, params, label, ctx);
     case "nup":
       return opNup(inputs, params, label, ctx);
+    case "image_convert":
+      return opImageConvert(inputs, params, label, ctx);
+    case "image_resize":
+      return opImageResize(inputs, params, label, ctx);
+    case "image_crop":
+      return opImageCrop(inputs, params, label, ctx);
     default:
       throw new Error("عملية غير معروفة");
   }
@@ -182,6 +436,11 @@ async function opCompress(
   const level = params.level ?? "متوسط";
   const results: ResultFile[] = [];
   for (const input of inputs) {
+    // ذكاء النوع: الصور تُصغّر بمحرك الصور، وPDF بمحرك الملفات — حتى في تحديد مختلط
+    if (input.kind === "image") {
+      results.push(await imageCompressOne(input, params, label, ctx));
+      continue;
+    }
     ctx.onProgress?.(`جارٍ تصغير حجم «${input.name}»…`);
     const bytes = await bytesOf(input);
     const textual = await hasTextLayer(bytes);
@@ -270,9 +529,17 @@ async function opRotate(
   label: string,
   ctx: RunContext
 ): Promise<ResultFile[]> {
-  const angle = Number(params.angle ?? "90");
+  const angle = Number.isFinite(Number(params.angle)) ? Number(params.angle ?? "90") : params.angle === "flipH" || params.angle === "flipV" ? params.angle : 90;
   const results: ResultFile[] = [];
   for (const input of inputs) {
+    // ذكاء النوع: الصور تُدوّر/تُقلب بالكانفس — والقلب متاح للصور فقط
+    if (input.kind === "image") {
+      results.push(await imageRotateOne(input, String(angle), label));
+      continue;
+    }
+    if (angle === "flipH" || angle === "flipV") {
+      throw new Error("القلب الأفقي/الرأسي متاح للصور فقط — للصفحات اختر زاوية دوران 90 أو 180 أو 270");
+    }
     ctx.onProgress?.(`جارٍ تدوير «${input.name}»…`);
     const doc = await loadPdfLib(await bytesOf(input));
     const total = doc.getPageCount();
@@ -563,21 +830,46 @@ async function opPageNumbers(
   return results;
 }
 
-/* صور إلى PDF */
+/* صور إلى PDF — ملف واحد مرتّب أو ملف منفصل لكل صورة */
 async function opImagesToPdf(
   inputs: EngineInput[],
   params: Record<string, string>,
   label: string,
   ctx: RunContext
 ): Promise<ResultFile[]> {
-  ctx.onProgress?.(`جارٍ تحويل ${inputs.length} صور إلى PDF…`);
+  const perFile = params.grouping === "ملف لكل صورة";
+  ctx.onProgress?.(
+    perFile
+      ? `جارٍ تحويل ${inputs.length} صور إلى ملف PDF لكل صورة…`
+      : `جارٍ تحويل ${inputs.length} صور إلى PDF…`
+  );
+  if (perFile) {
+    const results: ResultFile[] = [];
+    for (const input of inputs) {
+      const out = await PDFDocument.create();
+      const img = await embedAnyImage(out, input);
+      if ((params.layout ?? "ملائم تلقائي") === "A4") {
+        const page = out.addPage([595.28, 841.89]);
+        const margin = 28;
+        const scale = Math.min((page.getWidth() - margin * 2) / img.width, (page.getHeight() - margin * 2) / img.height);
+        page.drawImage(img, {
+          x: (page.getWidth() - img.width * scale) / 2,
+          y: (page.getHeight() - img.height * scale) / 2,
+          width: img.width * scale,
+          height: img.height * scale,
+        });
+      } else {
+        const page = out.addPage([img.width, img.height]);
+        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+      }
+      const saved = await out.save({ useObjectStreams: true });
+      results.push(resultFile(resultName("images_to_pdf", input.name), saved, label, "pdf"));
+    }
+    return results;
+  }
   const out = await PDFDocument.create();
   for (const input of inputs) {
-    const bytes = await bytesOf(input);
-    const name = input.name.toLowerCase();
-    let img;
-    if (name.endsWith(".png")) img = await out.embedPng(bytes);
-    else img = await out.embedJpg(bytes);
+    const img = await embedAnyImage(out, input);
     if ((params.layout ?? "ملائم تلقائي") === "A4") {
       const page = out.addPage([595.28, 841.89]);
       const margin = 28;
@@ -712,6 +1004,51 @@ async function opNup(
     }
     const saved = await out.save({ useObjectStreams: true });
     results.push(resultFile(resultName("nup", input.name), saved, label, "pdf"));
+  }
+  return results;
+}
+
+/* تحويل صيغة الصور */
+async function opImageConvert(
+  inputs: EngineInput[],
+  params: Record<string, string>,
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile[]> {
+  const results: ResultFile[] = [];
+  for (const input of inputs) {
+    ctx.onProgress?.(`جارٍ تحويل «${input.name}» إلى الصيغة الجديدة…`);
+    results.push(await imageConvertOne(input, params, label));
+  }
+  return results;
+}
+
+/* تغيير أبعاد الصور */
+async function opImageResize(
+  inputs: EngineInput[],
+  params: Record<string, string>,
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile[]> {
+  const results: ResultFile[] = [];
+  for (const input of inputs) {
+    ctx.onProgress?.(`جارٍ تغيير أبعاد «${input.name}»…`);
+    results.push(await imageResizeOne(input, params, label));
+  }
+  return results;
+}
+
+/* قص الصور بنسبة مركزي */
+async function opImageCrop(
+  inputs: EngineInput[],
+  params: Record<string, string>,
+  label: string,
+  ctx: RunContext
+): Promise<ResultFile[]> {
+  const results: ResultFile[] = [];
+  for (const input of inputs) {
+    ctx.onProgress?.(`جارٍ قص «${input.name}»…`);
+    results.push(await imageCropOne(input, params, label));
   }
   return results;
 }

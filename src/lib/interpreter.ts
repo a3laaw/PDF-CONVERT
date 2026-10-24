@@ -160,6 +160,31 @@ const INTENTS: Intent[] = [
     phrases: ["غيّر بيانات الملف", "اضبط العنوان والمؤلف"],
     match: (t) => /بيانات الملف|خصائص|ميتاداتا|metadata/.test(t) || hasWord(t, "العنوان", "المؤلف"),
   },
+  {
+    op: "image_convert",
+    priority: 15,
+    phrases: ["حوّل الصورة إلى JPG", "غيّر صيغة الصورة إلى PNG"],
+    match: (t) =>
+      /صيغه|صيغة|to png|to jpg|to webp/.test(t) &&
+      /صور|image/.test(t) &&
+      /png|jpg|jpeg|webp/.test(t),
+  },
+  {
+    op: "image_resize",
+    priority: 16,
+    phrases: ["صغّر مقاس الصورة 50%", "اضبط عرض الصورة 800"],
+    match: (t) =>
+      /مقاس|أبعاد|ابعاد|resize/.test(t) &&
+      /صور|image|%|بكسل|عرض/.test(t),
+  },
+  {
+    op: "image_crop",
+    priority: 17,
+    phrases: ["اقتصّ الصورة مربع", "قص الصورة 16:9"],
+    match: (t) =>
+      /قص|اقتصاص|اقتص|crop/.test(t) &&
+      /صور|image|مربع|1:1|4:3|3:4|16:9/.test(t),
+  },
 ];
 
 const SORTED_INTENTS = [...INTENTS].sort((a, b) => a.priority - b.priority);
@@ -178,7 +203,9 @@ function extractParams(op: OpId, original: string): Record<string, string> {
       break;
     }
     case "rotate": {
-      if (/180|نص دوره|نصف دوره|اقلب/.test(t)) params.angle = "180";
+      if (/قلب افقي|مرايه|مرآة/.test(t)) params.angle = "flipH";
+      else if (/قلب راسي|راسيا/.test(t)) params.angle = "flipV";
+      else if (/180|نص دوره|نصف دوره|اقلب/.test(t)) params.angle = "180";
       else if (/270|يسار|3 ربع|ربع دوره يسار/.test(t)) params.angle = "270";
       else if (/90|يمين|ربع دوره|ربع/.test(t)) params.angle = "90";
       else params.angle = "90";
@@ -232,7 +259,32 @@ function extractParams(op: OpId, original: string): Record<string, string> {
       break;
     case "images_to_pdf":
       params.layout = /a4|ورقه/.test(t) ? "A4" : "ملائم تلقائي";
+      params.grouping = /ملف لكل|كل صورة ملف|منفصل|منفصله/.test(t) ? "ملف لكل صورة" : "ملف واحد";
       break;
+    case "image_convert": {
+      params.format = /png/.test(t) ? "png" : /webp/.test(t) ? "webp" : "jpeg";
+      if (/عالي|أعلى/.test(t)) params.quality = "عالية";
+      else if (/مضغوط|خفيف/.test(t)) params.quality = "مضغوطة";
+      else params.quality = "متوازنة";
+      break;
+    }
+    case "image_resize": {
+      const m = original.match(/(\d+(?:\.\d+)?)\s*%|عرض\s*(\d{2,5})|(\d{2,5})\s*بكسل/);
+      params.value = m ? (m[1] ? `${m[1]}%` : m[2] ?? m[3]) : "50%";
+      break;
+    }
+    case "image_crop": {
+      params.ratio = /16\s*:?\s*9|سينمائي/.test(t)
+        ? "16:9"
+        : /3\s*:?\s*4/.test(t)
+          ? "3:4"
+          : /4\s*:?\s*3/.test(t)
+            ? "4:3"
+            : /a4|مستند/.test(t)
+              ? "A4طولي"
+              : "1:1";
+      break;
+    }
     default:
       break;
   }
@@ -265,7 +317,9 @@ export function stepLabel(op: OpId, params: Record<string, string>, filesCount =
     case "page_numbers":
       return params.format === "صفحة من" ? "ترقيم: صفحة 3 من 10" : "ترقيم الصفحات";
     case "images_to_pdf":
-      return "تحويل الصور إلى PDF";
+      return params.grouping === "ملف لكل صورة"
+        ? "صور إلى PDF — ملف لكل صورة"
+        : "تحويل الصور إلى PDF";
     case "pdf_to_images":
       return `تحويل PDF إلى صور (${params.format?.toUpperCase() ?? "PNG"})`;
     case "extract_text":
@@ -274,6 +328,12 @@ export function stepLabel(op: OpId, params: Record<string, string>, filesCount =
       return "ضبط بيانات الملف";
     case "nup":
       return "صفحتان في الورقة";
+    case "image_convert":
+      return `تحويل الصيغة إلى ${(params.format ?? "jpeg").toUpperCase()}`;
+    case "image_resize":
+      return `تغيير الأبعاد (${params.value ?? "50%"})`;
+    case "image_crop":
+      return `قص الصورة بنسبة ${params.ratio ?? "1:1"}`;
     default:
       return tool.name;
   }

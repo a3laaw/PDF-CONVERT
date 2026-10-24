@@ -18,6 +18,8 @@ export const OP_SUFFIX: Partial<Record<OpId, string>> = {
   nup: "صفحتين-في-الورقة",
   metadata: "بعد-البيانات",
   extract_text: "نص",
+  image_resize: "بعد-الأبعاد",
+  image_crop: "بعد-القص",
 };
 
 /** إزالة الامتداد */
@@ -43,6 +45,8 @@ export function resultName(op: OpId, fileName: string, index = 0, ext?: string):
       return `${base}.pdf`;
     case "extract_text":
       return `${base}-نص.txt`;
+    case "image_convert":
+      return `${base}${ext ?? ".jpg"}`;
     default: {
       const suffix = OP_SUFFIX[op] ?? "جديد";
       return `${base}-${suffix}${ext ?? (extOf(fileName) || ".pdf")}`;
