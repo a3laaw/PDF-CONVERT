@@ -309,6 +309,15 @@ function classifyOpenError(err: unknown): OpenFailKind {
 const FATAL_WASM_RE =
   /memory access out of bounds|worker_oom|out of memory|abort\(|runtime abort/i;
 const BENIGN_ENTITY_STAGE_RE = /conversion stage ['"]?ENTITY['"]?/i;
+/* رسالة هندسة الكيانات المعطوبة نفسها (AcCmErrors.ILLEGAL_PARAMETERS =
+   new ReferenceError('Illegal Parameters')): مسارات أخرى غير مرحلة ENTITY
+   تلتقطه وتسجله بصيغة بلا «conversion stage» فكانت تفلت من الفلتر —
+   AcTrView2d سطر 4109 «Deferred entity geometry failed» و2461 «Transient
+   entity geometry failed» و1526 «Failed to convert overlay entity» و3236
+   و3612 — وكلها try/catch داخل المكتبة تكمل بعدها الرسم عادي (بلاغ المستخدم
+   ×4 كان منها). مطابقة الرسالة ذاتها تكفي: تطبيقنا لا يرمي هذا النص أبدًا،
+   والأنماط القاتلة تبقى ظاهرة */
+const BENIGN_ILLEGAL_PARAMS_RE = /\billegal\s+parameters\b/i;
 
 /* تنسيق وسيط سجل: الرمز يُلحق فقط عند وجوده — إلحاقه الأعمى كان يترك
    «code:» فارغة بعد سطر المرحلة فيلتقط الاستخراج اسم الخطأ التالي بدله
@@ -330,7 +339,10 @@ function installCadNoiseFilter(): void {
   console.error = (...args: unknown[]) => {
     try {
       const s = args.map(fmtErrArg).join(" ");
-      if (BENIGN_ENTITY_STAGE_RE.test(s) && !FATAL_WASM_RE.test(s)) {
+      if (
+        (BENIGN_ENTITY_STAGE_RE.test(s) || BENIGN_ILLEGAL_PARAMS_RE.test(s)) &&
+        !FATAL_WASM_RE.test(s)
+      ) {
         quiet(...args);
         return;
       }
@@ -341,6 +353,35 @@ function installCadNoiseFilter(): void {
   };
 }
 installCadNoiseFilter();
+
+/* شبكة أمان للرفض غير الملتقط: بعض المسارات المؤجلة قد تمرّر نفس الخطأ السليم
+   كوعد مرفوض لا أحد يمسكه («Uncaught (in promise) ReferenceError») — نهدّئه
+   هنا أيضًا بنفس الشرط الصارم، وأي رفض آخر يبقى ظاهرًا كما هو */
+let benignRejectionNetInstalled = false;
+function installBenignRejectionNet(): void {
+  if (benignRejectionNetInstalled || typeof window === "undefined") return;
+  benignRejectionNetInstalled = true;
+  window.addEventListener("unhandledrejection", (ev) => {
+    try {
+      const r = ev?.reason as { message?: string } | string | undefined;
+      const msg = typeof r === "string" ? r : r?.message;
+      if (
+        msg &&
+        BENIGN_ILLEGAL_PARAMS_RE.test(msg) &&
+        !FATAL_WASM_RE.test(msg)
+      ) {
+        ev.preventDefault();
+        (console.debug?.bind(console) ?? console.error)(
+          "[cad] رفض سليم من محرك الرسم (كيان معطوب تم تجاهله):",
+          msg
+        );
+      }
+    } catch {
+      /* الشبكة لا تكسر التدفق */
+    }
+  });
+}
+installBenignRejectionNet();
 
 /* مراقبة سجل الأخطاء: المكتبة تسجّل فشل التحليل في console.error لكن وعد openDocument
    لا يُحسم أبدًا عند انهيار عامل wasm (worker_oom) — فتظهر دوّامة أبدية بدل رسالة الخطأ.
@@ -414,13 +455,119 @@ function hardenZoomOnProto(proto: object | null): boolean {
   return hardenZoomOnProto(Object.getPrototypeOf(proto));
 }
 
+/* ── تحصين عائلة التفاعلات الأخرى بنفس النمط: المكتبة تحمي screenToWorld/
+   worldToScreen وتنسى بقية الدوال التي تصل إلى activeLayoutView مباشرة:
+   · pick → activeLayoutView.pointToBox(…) — «reading 'pointToBox'» عند النقر
+     أثناء سباق تهيئة/تفكيك التخطيط (بلاغ المستخدم الجديد)
+   · flyTo → activeLayoutView.flyTo(…) بلا فحص
+   · مُعادِل mode يكتب بلا فحص (القارئ محميّ في المكتبة نفسها) ومُعادِل center
+     قارئه وكاتبه بلا فحص
+   الجرد الكامل للاستخدامات غير المحمية في AcTrView2d: 797 (مُغطّى بتحصين
+   _progressiveOpenFit) و907 و1284/1287 و1808 (zoomTo محصّن) و1989
+   و2178-2215 (pick) */
+type GuardedFn = (...args: unknown[]) => unknown;
+type ViewLike = { activeLayoutView?: unknown };
+
+const viewReady = (self: unknown): boolean => {
+  try {
+    return (self as ViewLike | null)?.activeLayoutView != null;
+  } catch {
+    return false;
+  }
+};
+
+function guardVoidMethod(
+  p: Record<string, unknown>,
+  key: string,
+  flag: string
+): boolean {
+  const orig = p[key];
+  if (typeof orig !== "function" || p[flag] === true)
+    return typeof orig === "function";
+  p[key] = function (this: ViewLike, ...args: unknown[]) {
+    if (!viewReady(this)) return undefined;
+    return (orig as GuardedFn).apply(this, args);
+  };
+  p[flag] = true;
+  return true;
+}
+
+/* pick يعيد مصفوفة النتائج — عند غياب التخطيط النشط لا شيء يُنتقى */
+function guardPick(p: Record<string, unknown>): boolean {
+  const orig = p.pick;
+  if (typeof orig !== "function" || p.__pickSafe === true)
+    return typeof orig === "function";
+  p.pick = function (this: ViewLike, ...args: unknown[]) {
+    if (!viewReady(this)) return [];
+    return (orig as GuardedFn).apply(this, args);
+  };
+  p.__pickSafe = true;
+  return true;
+}
+
+function guardAccessors(
+  p: Record<string, unknown>,
+  key: string,
+  flag: string,
+  fallback: unknown,
+  guardSetOnly: boolean
+): boolean {
+  const desc = Object.getOwnPropertyDescriptor(p, key);
+  if (!desc || p[flag] === true) return !!desc;
+  const next: PropertyDescriptor = {
+    configurable: desc.configurable,
+    enumerable: desc.enumerable,
+  };
+  if (desc.get) {
+    if (guardSetOnly) {
+      next.get = desc.get;
+    } else {
+      const get = desc.get;
+      next.get = function (this: ViewLike) {
+        if (!viewReady(this)) return fallback;
+        return get.call(this);
+      };
+    }
+  }
+  if (desc.set) {
+    const set = desc.set;
+    next.set = function (this: ViewLike, v: unknown) {
+      if (!viewReady(this)) return;
+      set.call(this, v);
+    };
+  }
+  try {
+    Object.defineProperty(p, key, next);
+    p[flag] = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hardenCadInteractions(proto: object | null): boolean {
+  if (!proto || (proto as unknown) === Object.prototype) return false;
+  const p = proto as Record<string, unknown>;
+  if (typeof p.pick !== "function" && typeof p.flyTo !== "function")
+    return false; /* ليس صنف العارض */
+  let any = false;
+  if (guardPick(p)) any = true;
+  if (guardVoidMethod(p, "flyTo", "__flySafe")) any = true;
+  if (guardAccessors(p, "mode", "__modeSafe", undefined, true)) any = true;
+  if (guardAccessors(p, "center", "__centerSafe", null, false)) any = true;
+  return any;
+}
+
 async function hardenCadZoomTo(): Promise<void> {
   if (zoomProtoHardened) return;
   try {
     const mod = await import("@mlightcad/cad-simple-viewer");
     const proto = (mod as { AcTrView2d?: { prototype?: object } }).AcTrView2d
       ?.prototype;
-    if (proto) hardenZoomOnProto(proto);
+    if (proto) {
+      hardenZoomOnProto(proto);
+      hardenCadInteractions(proto);
+    }
   } catch {
     /* المكتبة غير جاهزة بعد — تُجرَّب مع الفتح القادم */
   }
@@ -431,7 +578,11 @@ async function hardenCadZoomTo(): Promise<void> {
    يصل إلى activeLayoutView.zoomTo مباشرة فيرمي عند غياب التخطيط */
 function hardenViewInstance(view: unknown): void {
   if (!view || typeof view !== "object") return;
-  if (!zoomProtoHardened) hardenZoomOnProto(Object.getPrototypeOf(view));
+  if (!zoomProtoHardened) {
+    const pr = Object.getPrototypeOf(view);
+    hardenZoomOnProto(pr);
+    hardenCadInteractions(pr);
+  }
   const fit = (view as { _progressiveOpenFit?: object })._progressiveOpenFit;
   const f = fit as Record<string, unknown> & { __fitSafe?: boolean };
   if (f && !f.__fitSafe) {

@@ -823,3 +823,22 @@ Work Log:
 Stage Summary:
 - الخطأان المبلَّغان من المستخدم مُحيَّدان من الجذر: «Illegal Parameters» لم يعد يُسقط افتتاحات سليمة (مرحلة ENTITY الحميدة تُهدَّأ بدل رفض الفتح) و«reading 'zoomTo'» لم يعد يُرمى أبدًا (zoomTo محصَّنة حيث تحمي المكتبة نظيراتها) — وكُشف وأُصلح خلل استخراج رمز OOM الوراثي الذي جعل تصنيف الانهيار يعطي الرمز الخطأ منذ المهمة 41.
 - الملفات: cad-viewer.tsx (fmtErrArg + FATAL_WASM_RE/BENIGN_ENTITY_STAGE_RE + installCadNoiseFilter + watchStageFailure المنقّح + hardenZoomOnProto/hardenCadZoomTo/hardenViewInstance + استدعاؤها في الفتح وال destruction وgetViewFull) وdwgtest/degenerate.dxf الجديدة؛ e2e_cad_console_fix.sh وtest_stage_classify.js جديدان؛ لقطات 112–116.
+
+---
+Task ID: 43
+Agent: Main Agent (Z.ai)
+Task: الدفعة الثانية من أخطاء الكونسول المبلَّغة — «Illegal Parameters» ×4 (Console ReferenceError بصيغة بلا conversion stage) + «Cannot read properties of undefined (reading 'pointToBox')» ×1 (Runtime TypeError).
+
+Work Log:
+- **فك شفرة بلاغ pointToBox**: جرد AcTrView2d بالكامل فوجدت أن المكتبة تحمي screenToWorld/worldToScreen وتنسى أربع خانات أخرى تصل إلى activeLayoutView مباشرة: pick → activeLayoutView.pointToBox(…) (سطر 2180 — يرمي عند النقر أثناء سباق تهيئة/تفكيك التخطيط، وهو بلاغ المستخدم)، flyTo (1989)، مُعادِل mode الكاتب (907)، ومُعادِل center قارئه وكاتبه (1284/1287). استخدام 797 (المغلق التقدمي) كان مُغطًّى سلفًا بتحصين _progressiveOpenFit.
+- **التحصين العائلي**: hardenCadInteractions جديدة بثلاثة مساعدين — guardVoidMethod (flyTo: لا تخطيط نشط = لا شيء يطير)، guardPick (pick يعيد [] عند غياب التخطيط — عقد الدالة مصفوفة نتائج)، guardAccessors (تعريف خصائص بديل يحرس القارئ/الكاتب — mode يُحرس كاتبًا فقط لأن قارئه محميّ في المكتبة، وcenter يُحرس بالاتجاهين مع fallback=null). كلها بعلامات idempotent (__pickSafe/__flySafe/__modeSafe/__centerSafe) وتُثبَّت مع hardenCadZoomTo قبل إنشاء أي عارض وعلى النسخة احتياطًا في hardenViewInstance.
+- **فك شفرة بلاغ Illegal Parameters ×4**: بلاغ المستخدم «Console ReferenceError» يعني المكتبة التقطت الخطأ وبعتته console.error — ومصادرها اكتُشفت حرفيًا: AcTrView2d سطر 4109 «Deferred entity geometry failed» (التحويل المؤجل للنصوص/الرموز) و2461 «Transient entity geometry failed» و1526 «Failed to convert overlay entity» و3236 و3612 — كلها try/catch داخل المكتبة تكمل الرسم بعدها عاديًا، لكن صيغة السطور بلا «conversion stage» فكانت تفلت من فلتر المهمة 42 الذي يطابق مرحلة ENTITY فقط.
+- **الفلتر الموسّع**: BENIGN_ILLEGAL_PARAMS_RE = /\billegal\s+parameters\b/i — فلتر الضجيج الدائم يهدّئ أي console.error تحتوي الرسالة (منطق التضمين: AcCmErrors.ILLEGAL_PARAMETERS = new ReferenceError('Illegal Parameters') من @mlightcad/common، وتطبيقنا لا يرمي هذا النص أبدًا) مع بقاء FATAL_WASM_RE قاتلًا كما هو.
+- **شبكة أمان الرفض**: installBenignRejectionNet — مستمع unhandledrejection يمنع الطباعة الافتراضية لنفس الرسالة السليمة إن مرّت كوعد مرفوض بلا ملتقط (تأمين مستقبلي؛ مسارات التحويل المؤجل قد ترفض بدل تسجيل) — أي رفض آخر يبقى ظاهرًا.
+- **حادثة أداة قياس موثقة**: كشّاف الأخطاء السطري (rg -v debug) تسربت إليه سطور استمرار المدخلات متعددة الأسطر (at <anonymous>…) لأنها بلا وسم [debug] — أعيد بناؤه بawk واعٍ بالمستوى يتتبع وسم المدخلة الحالية؛ اكتُشف من الـraw dump أن الفشلين كانا إيجابيين كاذبين والمنتج سليم (المحاكاة ×2 هُدّئت debug، boom-real عدى error، الرفض العائم شبكته الشبكة).
+- **E2E scripts/e2e_cad_console_fix.sh — 18/18 ✓ (لقطات 112-117)**: أقسام جديدة — تحصين pick/flyTo/mode/center على proto@0، نداء pick مباشر يعيد مصفوفة 52 كيانًا (انحدار انتقاء سليم)، محاكاة سليمة ×2 + رفض عائم تُهدَّأ مع بقاء الخطأ الحقيقي (boom-real) ظاهرًا، ولا pointToBox ولا zoomTo عبر الجلسة كلها. انحدارات كاملة خضراء: DXF منحل يفتح بلا حوار، تكبير/ملاءمة، تحديد منطقة + تصدير PDF (9593B)، قياس (2,446,421 وحدة). انحدار الفتح القوي e2e_dwg_open_robust.sh: 9/10 (مطابق للخط الأساسي الموثق).
+- tsc: صفر أخطاء src/ · eslint: نظيف · فحص أمني: لا أسرار · سكربتا الترقيع المؤقتان حُذفا.
+
+Stage Summary:
+- الدفعة الثانية مُحيَّدة من الجذر: عائلة pointToBox كاملة (pick/flyTo/mode/center) محصّنة بنفس فلسفة zoomTo — لا تخطيط نشط = لا تفاعل يُنفَّذ — و«Illegal Parameters» صار يُهدَّأ أينما ظهر (console.error بأي صيغة أو وعد مرفوض عائم) لأنه بحكم تصميم المكتبة نفسها ضجيج كيانات تالفة تتجاهله وتكمل — والكونسول نظيف من الأخطاء الثلاثة المبلَّغة عبر 18 فحص E2E وكل الانحدارات.
+- الملفات: cad-viewer.tsx (BENIGN_ILLEGAL_PARAMS_RE + installBenignRejectionNet + viewReady/guardVoidMethod/guardPick/guardAccessors/hardenCadInteractions + ربطها في hardenCadZoomTo وhardenViewInstance) وe2e_cad_console_fix.sh (أقسام 3ب و8 و9 + كشّاف واعٍ بالمستوى) معدلة؛ لقطات 112-117.

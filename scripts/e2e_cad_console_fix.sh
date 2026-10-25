@@ -1,10 +1,12 @@
 #!/bin/bash
-# E2E — إصلاح أخطاء كونسول العارض المبلَّغة من المستخدم:
+# E2E — إصلاح أخطاء كونسول العارض المبلَّغة من المستخدم (الدفعة الأولى والثانية):
 #  (1) ReferenceError: Illegal Parameters — ضجيج كيانات تالفة ترميها المكتبة ثم تتجاهلها
-#      عمدًا (فشل مرحلة ENTITY غير حرج) — كان رصدها يُسقط افتتاحات سليمة ويزعج الكونسول
-#  (2) TypeError: Cannot read properties of undefined (reading 'zoomTo') — zoomTo في
-#      AcTrView2d غير محمية بعكس screenToWorld/worldToScreen — ترمي أثناء الملاءمة
-#      التقدمية/تبديل التخطيط/الإغلاق أثناء ملاءمة مؤجلة
+#      عمدًا — كان رصدها يُسقط افتتاحات سليمة ويزعج الكونسول (مرحلة ENTITY +
+#      مسارات التحويل المؤجل/العابر بصيغ بلا «conversion stage»)
+#  (2) TypeError: reading 'zoomTo' — zoomTo غير محمية بعكس screenToWorld/worldToScreen
+#  (3) TypeError: reading 'pointToBox' — pick → activeLayoutView.pointToBox(…) بلا فحص
+#      عند النقر أثناء سباق تهيئة/تفكيك التخطيط + flyTo ومُعادِل mode/center بنفس النمط
+#  (4) شبكة أمان للرفض غير الملتقط لنفس الرسالة السليمة
 # لقطات 112+
 B="agent-browser"
 S=/home/z/my-project/screenshots
@@ -42,8 +44,23 @@ click_at() { $B mouse move $1 $2 >/dev/null 2>&1; $B mouse down left >/dev/null 
 drag_box() { $B mouse move $1 $2 >/dev/null 2>&1; $B mouse down left >/dev/null 2>&1; $B mouse move $3 $4 >/dev/null 2>&1; $B mouse move $5 $6 >/dev/null 2>&1; $B mouse up left >/dev/null 2>&1; }
 CLOSE_VIEWER="(() => { const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === 'إغلاق العارض'); if (b) b.click(); return 'x'; })()"
 # تدقيق أخطاء الكونسول: يفحص السطور الجديدة فقط منذ آخر مسح
+# كشّاف واعٍ بالمستوى: مدخلات الكونسول متعددة الأسطر — سطر الاستمرار لا يحمل
+# وسم [debug] فكان يتسرب عبر rg -v. نتتبع مستوى المدخلة الحالية بawk:
+# فقط سطور مدخلات error/warning تُعتبر أخطاء
 console_errors() {
-  $B console 2>/dev/null | rg -i "Illegal Parameters|reading 'zoomTo'" | rg -v "debug" | head -5
+  $B console 2>/dev/null | awk '
+    /^\[(debug|info|log|verbose)\]/ {bad=0; next}
+    /^\[(error|warning|warn|critical)\]/ {bad=1}
+    bad && /Illegal Parameters|zoomTo|pointToBox/ {print}
+  ' | head -5
+}
+
+console_err_cat() {
+  $B console 2>/dev/null | awk '
+    /^\[(debug|info|log|verbose)\]/ {bad=0; next}
+    /^\[(error|warning|warn|critical)\]/ {bad=1}
+    bad && /zoomTo|pointToBox/ {print}
+  ' | head -3
 }
 
 cd /home/z/my-project
@@ -101,6 +118,26 @@ R=$(EV "(() => {
 })()")
 ck "$R"
 
+echo "══ 3ب) تحصين عائلة التفاعلات: pick/flyTo/mode/center ══"
+R=$(EV "(() => {
+  let p = Object.getPrototypeOf(window.__cadMgr.curView);
+  let hops = 0;
+  while (p && p !== Object.prototype && hops < 8) {
+    if (p.__pickSafe) {
+      const ok = p.__flySafe && p.__modeSafe && p.__centerSafe;
+      return (ok ? 'OK pick+flyTo+mode+center محصّنين proto@' + hops : 'FAIL ناقص fly=' + !!p.__flySafe + ' mode=' + !!p.__modeSafe + ' center=' + !!p.__centerSafe);
+    }
+    p = Object.getPrototypeOf(p); hops++;
+  }
+  return 'FAIL __pickSafe غير مثبت';
+})()")
+ck "$R"
+R=$(EV "(() => {
+  const v = window.__cadMgr.curView;
+  const r = typeof v.pick === 'function' ? v.pick({ x: 500, y: 300 }) : null;
+  return (Array.isArray(r) ? 'OK نداء pick مباشر يعيد مصفوفة len=' + r.length : 'FAIL pick=' + typeof r);
+})()")
+ck "$R"
 echo "══ 4) انحدار التكبير: زر تكبير يعمل بعد التحصين (zoomTo الحقيقي يُنفَّذ) ══"
 R=$(EV "(() => {
   const v = window.__cadMgr.curView;
@@ -200,9 +237,21 @@ R=$(EV "(() => {
 ck "$R"
 $B screenshot $S/115-measure-regression.png >/dev/null && echo "لقطة 115 ✓"
 
-echo "══ 8) تدقيق كونسول نهائي: لا zoomTo ولا Illegal Parameters عبر كل الجلسة ══"
+echo "══ 8) الفلتر الموسّع والشبكة: سليم محاكاة يُهدَّأ وحقيقي يبقى ظاهرًا ══"
+$B console --clear >/dev/null 2>&1
+EV "(() => { console.error(new ReferenceError('Illegal Parameters')); console.error(new ReferenceError('Illegal Parameters')); console.error(new Error('boom-real-test')); return 'OK emitted'; })()" >/dev/null
+EV "(() => { Promise.reject(new ReferenceError('Illegal Parameters')); return 'OK rejected'; })()" >/dev/null
+sleep 2
 BAD=$(console_errors)
-if [ -z "$BAD" ]; then ck "OK الكونسول نظيف من الخطأين المبلَّغين"; else fail=$((fail+1)); echo "FAIL: $BAD"; fi
+if [ -z "$BAD" ]; then ck "OK السليم المحاكى (×2 + رفض عائم) مهادئ"; else fail=$((fail+1)); echo "FAIL: $BAD"; fi
+if $B console 2>/dev/null | rg -qi "boom-real-test"; then ck "OK الخطأ الحقيقي (boom-real) ظاهر كما هو"; else fail=$((fail+1)); echo "FAIL: boom-real اختفى — الفلتر صار واسعًا"; fi
+BAD2=$(console_err_cat)
+if [ -z "$BAD2" ]; then ck "OK لا pointToBox ولا zoomTo عبر الجلسة كلها"; else fail=$((fail+1)); echo "FAIL: $BAD2"; fi
+$B screenshot $S/117-benign-filter-net.png >/dev/null && echo "لقطة 117 ✓"
+
+echo "══ 9) تدقيق كونسول نهائي: نظافة كاملة عبر كل الجلسة ══"
+BAD=$(console_errors)
+if [ -z "$BAD" ]; then ck "OK الكونسول نظيف من الأخطاء الثلاثة المبلَّغة"; else fail=$((fail+1)); echo "FAIL: $BAD"; fi
 $B console 2>/dev/null | rg -i "conversion stage" | head -3
 $B screenshot $S/116-final-clean.png >/dev/null && echo "لقطة 116 ✓"
 
