@@ -256,11 +256,83 @@ const TOOLBAR_ACTIONS = {
   print: "cad.print",
 } as const;
 
+/* ── شمّ إصدار DWG من الترويسة (أول 6 بايتات) — لعرضه للمستخدم وتشخيص الفشل ── */
+const DWG_VERSIONS: Record<string, string> = {
+  AC1012: "13",
+  AC1014: "14",
+  AC1015: "2000",
+  AC1018: "2004",
+  AC1021: "2007",
+  AC1024: "2010",
+  AC1027: "2013",
+  AC1032: "2018",
+};
+
+function dwgVersionLabel(buf: ArrayBuffer): string {
+  try {
+    const head = new TextDecoder("latin1").decode(buf.slice(0, 6));
+    return DWG_VERSIONS[head.trim()] || "";
+  } catch {
+    return "";
+  }
+}
+
+/* حجم مقروء — وحدات لاتينية مفهومة بكل اللغات */
+function fmtSizeText(bytes: number): string {
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)}MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+
+/* تصنيف أخطاء فتح DWG — لاختيار الرسالة وتقرير إعادة المحاولة */
+type OpenFailKind = "oom" | "timeout" | "invalid" | "crash";
+
+function classifyOpenError(err: unknown): OpenFailKind {
+  const msg = String(err instanceof Error ? err.message : err);
+  const code =
+    typeof err === "object" && err && "code" in err
+      ? String((err as { code?: unknown }).code)
+      : "";
+  if (code === "worker_oom" || /out of memory|memory access|oom/i.test(msg))
+    return "oom";
+  if (/timeout|timed out/i.test(msg) || /timeout/i.test(code)) return "timeout";
+  if (/invalid|not a valid|unsupported/i.test(msg) || /invalid/i.test(code))
+    return "invalid";
+  return "crash";
+}
+
+/* مراقبة سجل الأخطاء: المكتبة تسجّل فشل التحليل في console.error لكن وعد openDocument
+   لا يُحسم أبدًا عند انهيار عامل wasm (worker_oom) — فتظهر دوّامة أبدية بدل رسالة الخطأ.
+   نكتشف سطر "Error occurred in conversion stage" ونرفض فورًا برمز الخطأ */
+function watchStageFailure(onFail: (code: string) => void): () => void {
+  const orig = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    try {
+      const s = args
+        .map((a) => {
+          const m = a as { message?: string; name?: string; code?: string };
+          return `${m?.name || ""} ${m?.message || a} code:${m?.code || ""}`;
+        })
+        .join(" ");
+      if (/conversion stage/i.test(s)) {
+        const m = /code:\s*"?([A-Za-z_]+)"?/.exec(s);
+        onFail(m ? m[1] : "worker_error");
+      }
+    } catch {
+      /* السجل لا يكسر التدفق */
+    }
+    orig(...args);
+  };
+  return () => {
+    console.error = orig;
+  };
+}
+
 export function CadViewer({ fileName, file, onClose }: Props) {
   const { t } = useI18n();
   const boxRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("__loading__");
   const [error, setError] = useState<string | null>(null);
+  const [fileMeta, setFileMeta] = useState<string | null>(null); /* «DWG 2013 · 12.4MB» */
   const [layers, setLayers] = useState<LayerRow[] | null>(null);
   const [showLayers, setShowLayers] = useState(false);
   const [busy, setBusy] = useState("");
@@ -291,6 +363,8 @@ export function CadViewer({ fileName, file, onClose }: Props) {
   const selPinchedRef = useRef(false);
 
   const isDwg = /\.dwg$/i.test(file.name);
+  /* عدّاد إعادة فتح يدوي — زر «أعد المحاولة» في حوار الخطأ يعيد تشغيل دورة الفتح كاملة */
+  const [openTick, setOpenTick] = useState(0);
 
   const getView = useCallback(() => {
     const mgr = mgrRef.current as { curView?: MeasureView } | null;
@@ -356,6 +430,7 @@ export function CadViewer({ fileName, file, onClose }: Props) {
     /* ملف جديد = قياسات قديمة ملهاش لازمة */
     setMPts([]);
     setMCursor(null);
+    setFileMeta(null);
     (async () => {
       try {
         setStatus("k:cad.preparing");
@@ -372,7 +447,8 @@ export function CadViewer({ fileName, file, onClose }: Props) {
         /* مدير واحد في الجلسة — نُصفّي القديم لنربط الكانفس بالحاوية الجديدة */
         const existing = simple.AcApDocManager.tryGetInstance();
         if (existing) await existing.destroy();
-        /* DWG عبر LibreDWG (WASM) — وDXF عبر محوّل dxf-json — كلاهما مجاني */
+        /* DWG عبر LibreDWG (WASM) — وDXF عبر محوّل dxf-json — كلاهما مجاني.
+         * مهلة صريحة 5 دقائق: الافتراضي يسقّف عند دقيقتين فتشمل الملفات الكبيرة قبل اكتمال التحليل */
         const { AcDbLibreDwgConverter } = await import(
           "@mlightcad/libredwg-converter"
         );
@@ -382,6 +458,7 @@ export function CadViewer({ fileName, file, onClose }: Props) {
             convertByEntityType: false,
             useWorker: true,
             parserWorkerUrl: dwgParserUrl,
+            timeout: 300000,
           })
         );
         const { AcDbDxfConverter } = await import(
@@ -392,6 +469,7 @@ export function CadViewer({ fileName, file, onClose }: Props) {
           new AcDbDxfConverter({
             useWorker: true,
             parserWorkerUrl: "/workers/dxf-parser-worker.js",
+            timeout: 300000,
           })
         );
         const workersOk = await Promise.all([
@@ -414,33 +492,73 @@ export function CadViewer({ fileName, file, onClose }: Props) {
         (window as unknown as { __cadMgr?: unknown }).__cadMgr = manager;
         setStatus(isDwg ? "k:cad.readingDwg" : "k:cad.readingDxf");
         const buf = await file.arrayBuffer();
+        /* معلومات الملف للعرض: الإصدار والحجم — تبقى ظاهرة في رسائل الخطأ أيضًا */
+        const ver = isDwg ? dwgVersionLabel(buf) : "";
+        const sizeText = fmtSizeText(buf.byteLength);
+        if (isDwg && ver) {
+          setFileMeta(`DWG ${ver} · ${sizeText}`);
+          setStatus(t("cad.readingDwgInfo", { version: ver, size: sizeText }));
+        }
+        /* نسخة احتياطية للبيانات — openDocument قد تنقل المخزن للعامل فتنفصل */
+        const retryBuf = buf.slice(0);
         const { AcEdOpenMode } = await import("@mlightcad/cad-simple-viewer");
-        let ok: boolean;
-        try {
-          ok = await manager.openDocument(file.name, buf, {
-            mode: AcEdOpenMode.Read,
+        const openFailKey = (kind: OpenFailKind) =>
+          !isDwg
+            ? "k:cad.openFail"
+            : kind === "timeout"
+              ? "k:cad.openFailTimeout"
+              : kind === "invalid"
+                ? "k:cad.openFailInvalid"
+                : "k:cad.openFailDwg";
+        let ok = false;
+        let failKind: OpenFailKind = "crash";
+        /* محاولتان: أخطاء العمال العابرة (سباقات التهيئة/النقل) تعتذر غالبًا من الثانية.
+         * كل محاولة ملفوفة بحارسين: مراقبة سجل فشل التحليل (الوعد لا يُحسم عند انهيار
+         * العامل) وحارس زمني شامل 5.5 د فوق مهلة المحوّل */
+        const attemptOpen = (buffer: ArrayBuffer) =>
+          new Promise<boolean>((resolve, reject) => {
+            let settled = false;
+            const finish = (fn: () => void) => {
+              if (settled) return;
+              settled = true;
+              stopWatch();
+              clearTimeout(guard);
+              fn();
+            };
+            const stopWatch = watchStageFailure((code) => {
+              finish(() =>
+                reject(
+                  Object.assign(new Error(`stage failure: ${code}`), { code })
+                )
+              );
+            });
+            const guard = setTimeout(() => {
+              finish(() => reject(new Error("open watchdog timeout")));
+            }, 330000);
+            manager
+              .openDocument(file.name, buffer, { mode: AcEdOpenMode.Read })
+              .then((v) => finish(() => resolve(v)))
+              .catch((e) => finish(() => reject(e)));
           });
-        } catch (openErr) {
-          /* أخطاء المحرك تصل إنجليزية خام — نصنفها ونعطي رسالة عربية مفيدة.
-           * worker_oom = انهيار wasm أثناء تحليل DWG معقد (خلل معروف في LibreDWG) */
-          if (!alive) return;
-          const msg = String(
-            openErr instanceof Error ? openErr.message : openErr
-          );
-          const code =
-            typeof openErr === "object" && openErr && "code" in openErr
-              ? String((openErr as { code?: unknown }).code)
-              : "";
-          if (
-            code === "worker_oom" ||
-            /out of memory|memory access|oom/i.test(msg)
-          )
-            throw new Error("k:cad.openFailDwg");
-          throw new Error("k:cad.openFail");
+        for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+          try {
+            if (attempt > 0) {
+              setStatus("k:cad.retryOpen");
+              await new Promise((r) => setTimeout(r, 900));
+              if (!alive) return;
+            }
+            ok = await attemptOpen(attempt === 0 ? buf : retryBuf);
+          } catch (openErr) {
+            /* أخطاء المحرك تصل إنجليزية خام — نصنفها ونعطي رسالة عربية مفيدة */
+            if (!alive) return;
+            failKind = classifyOpenError(openErr);
+            /* الملف غير صالح أو انتهت المهلة — إعادة المحاولة لا تفيد */
+            if (failKind === "invalid" || failKind === "timeout") break;
+            ok = false;
+          }
         }
         if (!alive) return;
-        if (!ok)
-          throw new Error(isDwg ? "k:cad.openFailDwg" : "k:cad.openFail");
+        if (!ok) throw new Error(openFailKey(failKind));
         /* الطبقات: قائمة حية تتحدث مع أي تغيير */
         const doc = manager.curDocument;
         const refresh = () => {
@@ -489,7 +607,7 @@ export function CadViewer({ fileName, file, onClose }: Props) {
     return () => {
       alive = false;
     };
-  }, [file]);
+  }, [file, openTick]);
 
   /* ── التكبير والملاءمة — نفس أسلوب أمر ZOOM الداخلي: صندوق الشاشة الحالي → تكبير حول مركزه ── */
   const zoomBy = useCallback(async (factor: number) => {
@@ -1251,16 +1369,39 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
               {error ? (
                 <>
                   <p className="text-sm font-extrabold">{t("cad.openFailTitle")}</p>
+                  {fileMeta && (
+                    <p
+                      className="mt-1 text-[10px] font-extrabold tracking-wide text-red-200/70"
+                      style={{ direction: "ltr" }}
+                      data-testid="cad-file-meta"
+                    >
+                      {fileMeta}
+                    </p>
+                  )}
                   <p className="mt-1 text-xs leading-relaxed text-red-200/80">
                     {error.startsWith("k:") ? t(error.slice(2)) : error}
                   </p>
-                  <Button
-                    size="sm"
-                    onClick={onClose}
-                    className="mt-3 bg-white/10 font-extrabold text-white hover:bg-white/20"
-                  >
-                    {t("ws.cancel")}
-                  </Button>
+                  <div className="mt-3 flex items-center justify-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setError(null);
+                        setStatus("__loading__");
+                        setOpenTick((v) => v + 1);
+                      }}
+                      data-testid="cad-retry-open"
+                      className="bg-emerald-600 font-extrabold text-white hover:bg-emerald-700"
+                    >
+                      {t("cad.retryNow")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={onClose}
+                      className="bg-white/10 font-extrabold text-white hover:bg-white/20"
+                    >
+                      {t("ws.cancel")}
+                    </Button>
+                  </div>
                 </>
               ) : (
                 <>
