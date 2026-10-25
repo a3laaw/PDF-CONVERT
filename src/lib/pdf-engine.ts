@@ -1,7 +1,7 @@
 /* محرك PDF «محطّة PDF» — يعمل بالكامل داخل متصفح المستخدم (خصوصية تامة)
    pdf-lib للتعديل + pdfjs للعرض والاستخراج + Canvas للنص العربي المُشكَّل */
 
-import { PDFDocument, degrees, rgb, StandardFonts } from "pdf-lib";
+import { PDFDocument, PDFDict, PDFHexString, PDFName, PDFRawStream, PDFRef, PDFString, degrees, rgb, StandardFonts } from "pdf-lib";
 import { toHindiDigits } from "./arabic";
 import { parsePageRanges } from "./interpreter";
 import { resultName, stripExt } from "./naming";
@@ -1110,25 +1110,100 @@ async function opToOffice(
   return results;
 }
 
-/* بيانات الملف */
+/* بيانات الملف — تعديل الحقول أو مسحها كلها بضغطة (خصوصية) */
 async function opMetadata(
   inputs: EngineInput[],
   params: Record<string, string>,
   label: string,
   ctx: RunContext
 ): Promise<ResultFile[]> {
+  const clear = params.mode === "clear";
   const results: ResultFile[] = [];
   for (const input of inputs) {
-    ctx.onProgress?.(`جارٍ ضبط بيانات «${input.name}»…`);
+    ctx.onProgress?.(
+      clear ? `جارٍ مسح بيانات «${input.name}»…` : `جارٍ ضبط بيانات «${input.name}»…`
+    );
     const doc = await loadPdfLib(await bytesOf(input));
-    if (params.title) doc.setTitle(params.title);
-    if (params.author) doc.setAuthor(params.author);
-    doc.setModificationDate(new Date());
-    doc.setProducer("محوّل PDF");
+    if (clear) {
+      /* مسح حقيقي للخصوصية: حذف مفاتيح /Info + تعطيل القيم غير المباشرة
+         + تصفير تدفق XMP (المرجع وحده لا يكفي — البقايا تظل مقروءة بالبايتات) */
+      const infoObj = doc.context.trailerInfo.Info;
+      const infoDict = infoObj ? doc.context.lookup(infoObj) : undefined;
+      if (infoDict instanceof PDFDict) {
+        for (const key of [
+          "Title", "Author", "Subject", "Keywords",
+          "Creator", "Producer", "CreationDate", "ModDate",
+        ]) {
+          const k = PDFName.of(key);
+          const val = infoDict.get(k);
+          if (val instanceof PDFRef) {
+            const obj = doc.context.lookup(val);
+            if (obj instanceof PDFString || obj instanceof PDFHexString) {
+              doc.context.assign(val, PDFString.of(""));
+            }
+          }
+          infoDict.delete(k);
+        }
+      }
+      const metaVal = doc.catalog.get(PDFName.of("Metadata"));
+      if (metaVal) {
+        const resolved = doc.context.lookup(metaVal);
+        if (resolved instanceof PDFRawStream) resolved.contents.fill(0);
+        doc.catalog.delete(PDFName.of("Metadata"));
+      }
+    } else {
+      if (params.title) doc.setTitle(params.title);
+      if (params.author) doc.setAuthor(params.author);
+      if (params.subject) doc.setSubject(params.subject);
+      if (params.keywords) {
+        const list = params.keywords
+          .split(/[،,]/)
+          .map((k) => k.trim())
+          .filter(Boolean);
+        if (list.length) doc.setKeywords(list);
+      }
+      doc.setModificationDate(new Date());
+      doc.setProducer("محوّل PDF");
+    }
     const saved = await doc.save({ useObjectStreams: true });
     results.push(resultFile(resultName("metadata", input.name), saved, label, "pdf"));
   }
   return results;
+}
+
+/* قراءة البيانات الحالية للعرض والتعبئة المسبقة — آمنة على الملفات المقفولة */
+export interface PdfMetaInfo {
+  title?: string;
+  author?: string;
+  subject?: string;
+  keywords?: string;
+  creator?: string;
+  producer?: string;
+  created?: string;
+  modified?: string;
+  encrypted?: boolean;
+}
+
+export async function readPdfMetadata(file: File): Promise<PdfMetaInfo> {
+  try {
+    const doc = await loadPdfLib(new Uint8Array(await file.arrayBuffer()));
+    const fmt = (d: Date | undefined) => {
+      if (!d || Number.isNaN(d.getTime())) return undefined;
+      return d.toLocaleDateString("ar", { year: "numeric", month: "long", day: "numeric" });
+    };
+    return {
+      title: doc.getTitle() || undefined,
+      author: doc.getAuthor() || undefined,
+      subject: doc.getSubject() || undefined,
+      keywords: doc.getKeywords() || undefined,
+      creator: doc.getCreator() || undefined,
+      producer: doc.getProducer() || undefined,
+      created: fmt(doc.getCreationDate()),
+      modified: fmt(doc.getModificationDate()),
+    };
+  } catch {
+    return { encrypted: true };
+  }
 }
 
 /* قفل/فتح القفل بكلمة سر — qpdf-wasm داخل المتصفح */

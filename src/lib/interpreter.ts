@@ -147,7 +147,9 @@ const INTENTS: Intent[] = [
     op: "delete",
     priority: 8,
     phrases: ["احذف الصفحة 2", "شيل الصفحات الفارغة"],
-    match: (t) => /delete/.test(t) || hasWord(t, "احذف", "حذف", "شيل", "امسح", "انسف"),
+    match: (t) =>
+      (/delete/.test(t) || hasWord(t, "احذف", "حذف", "شيل", "امسح", "انسف")) &&
+      !/بيانات|خصايص|خصائص|ميتاداتا|metadata/.test(t),
   },
   {
     op: "rotate",
@@ -186,8 +188,11 @@ const INTENTS: Intent[] = [
   {
     op: "metadata",
     priority: 14,
-    phrases: ["غيّر بيانات الملف", "اضبط العنوان والمؤلف"],
-    match: (t) => /بيانات الملف|خصائص|ميتاداتا|metadata/.test(t) || hasWord(t, "العنوان", "المؤلف"),
+    phrases: ["غيّر بيانات الملف", "اضبط العنوان والمؤلف", "امسح بيانات الملف"],
+    match: (t) =>
+      /بيانات الملف|خصايص|خصائص|ميتاداتا|metadata/.test(t) ||
+      (/(?:ال)?عنوان|(?:ال)?مولف|(?:ال)?مؤلف/.test(t) && !/صفحة|ترقيم/.test(t)) ||
+      /امسح البيانات|امسح الخصايص|احذف البيانات|مسح البيانات/.test(t),
   },
   {
     op: "image_convert",
@@ -284,10 +289,24 @@ function extractParams(op: OpId, original: string): Record<string, string> {
       break;
     }
     case "metadata": {
-      const titleM = original.match(/العنوان\s*[«"']?([^«»"']{1,60})[»"']?/);
-      const authorM = original.match(/(?:المؤلف|بقلم)\s*[«"']?([^«»"']{1,40})[»"']?/);
+      if (/امسح|احذف|نظ.?ف|إخفاء|اخفاء/.test(original)) {
+        params.mode = "clear";
+        break;
+      }
+      params.mode = "edit";
+      /* المقتبس أولاً (يتجاوز كلمات الوصل)، وإلا أول كلمة بعد الحقل */
+      const titleM =
+        original.match(/(?:ال)?عنوان[^«»"']{0,30}?[«"']([^«»"']{1,60})[»"']/) ??
+        original.match(/(?:ال)?عنوان\s+(?:ال)?ملف\s+(?:الى|إلى|هو|يساوي)?\s*([^\s«»"',،]{1,50})/);
+      const authorM =
+        original.match(/(?:(?:ال)?مؤلف|بقلم|المولف)[^«»"']{0,30}?[«"']([^«»"']{1,40})[»"']/) ??
+        original.match(/(?:(?:ال)?مؤلف|بقلم|المولف)\s+([^\s«»"',،]{1,30})/);
+      const subjectM =
+        original.match(/(?:ال)?موضوع[^«»"']{0,30}?[«"']([^«»"']{1,80})[»"']/) ??
+        original.match(/(?:ال)?موضوع\s+([^\s«»"',،]{1,50})/);
       params.title = titleM?.[1]?.trim() ?? "";
       params.author = authorM?.[1]?.trim() ?? "";
+      params.subject = subjectM?.[1]?.trim() ?? "";
       break;
     }
     case "nup":
@@ -370,7 +389,7 @@ export function stepLabel(op: OpId, params: Record<string, string>, filesCount =
     case "extract_text":
       return "استخراج النصوص";
     case "metadata":
-      return "ضبط بيانات الملف";
+      return params.mode === "clear" ? "مسح بيانات الملف (خصوصية)" : "ضبط بيانات الملف";
     case "nup":
       return "صفحتان في الورقة";
     case "image_convert":

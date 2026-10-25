@@ -72,4 +72,4 @@ scripts/.gh_*
 /scripts/gh_poll_token.py
 # local databases
 *.db
-*.db-journal
+*.db-journalout_*.pdf

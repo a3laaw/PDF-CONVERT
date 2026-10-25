@@ -7,7 +7,8 @@ import { Check, Copy, FileOutput, Pencil, Plus, RotateCw, Trash2, X } from "luci
 import { useWorkspace } from "@/store/workspace";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
-import { downloadBlob, openBlobInNewTab, pageQuickAction, pdfPageThumbs } from "@/lib/pdf-engine";
+import { downloadBlob, openBlobInNewTab, pageQuickAction, pdfPageThumbs, readPdfMetadata } from "@/lib/pdf-engine";
+import type { PdfMetaInfo } from "@/lib/pdf-engine";
 import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
 import { CadViewer } from "@/components/pdf-station/cad-viewer";
 import { SplitPanel } from "@/components/pdf-station/split-panel";
@@ -220,6 +221,7 @@ const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
   sign: { verb: "ثبّت التوقيع" },
   protect: { verb: "اقفل الملف" },
   unlock: { verb: "افتح القفل" },
+  metadata: { verb: "عدّل البيانات" },
 };
 
 /* الأدوات التي تعمل على صفحات محددة — زرّها يعرض عدد الصفحات المختارة */
@@ -324,6 +326,7 @@ export function Workbench() {
   const [selPages, setSelPages] = useState<number[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string[]>>({});
   const [page, setPage] = useState(1);
+  const [metaInfo, setMetaInfo] = useState<PdfMetaInfo | null>(null);
 
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -353,6 +356,30 @@ export function Workbench() {
     const op = new URLSearchParams(window.location.search).get("op");
     if (op && TOOLS_BY_ID[op as OpId]) setTool(op as OpId);
   }, []);
+
+  /* أداة البيانات: قراءة الخصائص الحالية + تعبئة الحقول مسبقًا (عند تغيير الأداة أو الملف) */
+  useEffect(() => {
+    if (tool !== "metadata") return;
+    if (!activeFile || activeFile.kind !== "pdf") return;
+    let alive = true;
+    readPdfMetadata(activeFile.file)
+      .then((info) => {
+        if (!alive) return;
+        setMetaInfo(info);
+        setParams((p) => ({
+          ...p,
+          mode: p.mode || "edit",
+          title: info.title ?? "",
+          author: info.author ?? "",
+          subject: info.subject ?? "",
+          keywords: info.keywords ?? "",
+        }));
+      })
+      .catch(() => alive && setMetaInfo({ encrypted: true }));
+    return () => {
+      alive = false;
+    };
+  }, [tool, activeFile]);
 
   /* المعاينة الكبيرة للصفحة النشطة — مفتوحة بالمفتاح لتفادي setState المتزامن */
   const previewKey = activeFile ? `${activeFile.id}:${activeFile.kind === "image" ? "img" : page}` : "";
@@ -1026,6 +1053,23 @@ export function Workbench() {
                 {t("ws.hintOffice")}
               </span>
             )}
+            {tool === "metadata" && metaInfo && (
+              <span
+                data-testid="meta-current"
+                className="w-full text-[10px] text-muted-foreground"
+              >
+                {metaInfo.encrypted
+                  ? t("meta.encrypted")
+                  : metaInfo.title || metaInfo.author || metaInfo.producer || metaInfo.created
+                    ? `${t("meta.current")}: ${metaInfo.title ? `«${metaInfo.title}»` : "—"} · ${metaInfo.author ? `«${metaInfo.author}»` : "—"}${metaInfo.producer ? ` · ${metaInfo.producer}` : ""}${metaInfo.created ? ` · ${t("meta.created")} ${metaInfo.created}` : ""}`
+                    : t("meta.none")}
+              </span>
+            )}
+            {tool === "metadata" && params.mode === "clear" && (
+              <span className="w-full text-[10px] font-bold text-amber-600">
+                {t("meta.clearHint")}
+              </span>
+            )}
             {tool ? (
               <>
                 <span
@@ -1035,13 +1079,23 @@ export function Workbench() {
                   <span aria-hidden>{TOOLS_BY_ID[tool].emoji}</span>
                   {t(toolKey(tool, "name"))}
                 </span>
-                {TOOLS_BY_ID[tool].fields.map((f) => (
+                {TOOLS_BY_ID[tool].fields
+                  .filter(
+                    (f) =>
+                      !(
+                        tool === "metadata" &&
+                        params.mode === "clear" &&
+                        ["title", "author", "subject", "keywords"].includes(f.key)
+                      )
+                  )
+                  .map((f) => (
                   <span key={f.key} className="flex items-center gap-1.5">
                     <span className="text-[11px] font-bold text-muted-foreground">{f.label}</span>
                     {f.type === "select" ? (
                       <select
                         value={params[f.key] ?? f.default ?? ""}
                         onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
+                        data-testid={`field-${f.key}`}
                         className="rounded-lg border border-border bg-white px-2 py-1.5 text-xs font-bold"
                       >
                         {f.options?.map((o) => (
@@ -1065,6 +1119,7 @@ export function Workbench() {
                         value={params[f.key] ?? ""}
                         onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}
                         placeholder={f.placeholder}
+                        data-testid={`field-${f.key}`}
                         className="w-44 rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold placeholder:font-normal placeholder:text-muted-foreground/60"
                       />
                     )}

@@ -450,14 +450,29 @@ export const TOOLS: ToolDef[] = [
   {
     id: "metadata",
     name: "بيانات الملف",
-    desc: "اضبط العنوان والمؤلف والموضوع التي تظهر في خصائص الملف",
+    desc: "عدّل العنوان والمؤلف والموضوع والكلمات المفتاحية، أو امسح كل البيانات بضغطة — خصوصية تامة",
     category: "بيانات",
     emoji: "ℹ️",
-    keywords: ["بيانات الملف", "العنوان", "المؤلف", "خصائص", "ميتاداتا"],
+    keywords: [
+      "بيانات الملف", "العنوان", "المؤلف", "خصائص", "ميتاداتا", "metadata",
+      "مسح البيانات", "حذف البيانات", "خصوصية", "الكلمات المفتاحية", "الموضوع",
+    ],
     accepts: ["pdf"],
     fields: [
+      {
+        key: "mode",
+        label: "الوضع",
+        type: "select",
+        default: "edit",
+        options: [
+          { value: "edit", label: "تعديل البيانات" },
+          { value: "clear", label: "مسح كل البيانات (خصوصية)" },
+        ],
+      },
       { key: "title", label: "العنوان", type: "text", default: "", placeholder: "مثال: عرض المشروع" },
       { key: "author", label: "المؤلف", type: "text", default: "", placeholder: "اسمك أو جهتك" },
+      { key: "subject", label: "الموضوع", type: "text", default: "", placeholder: "وصف قصير للملف" },
+      { key: "keywords", label: "الكلمات المفتاحية", type: "text", default: "", placeholder: "افصل بينها بفاصلة" },
     ],
     outName: "بعد-تعديل-البيانات.pdf",
   },
