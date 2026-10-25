@@ -37,6 +37,8 @@ $B set viewport 1440 900 >/dev/null
 echo "══ 1) الستة إصدارات كلها تُفتح بعد التغييرات ══"
 for v in 2000 2004 2007 2010 2013 2018; do
   $B open http://localhost:3000 >/dev/null
+  $B eval "localStorage.setItem('mahatta-locale','ar'); 'ok'" >/dev/null 2>&1  # بذر اللغة (درس Task 50)
+  $B reload >/dev/null 2>&1
   $B wait --load networkidle >/dev/null
   warmup
   R=$(inject "example_$v.dwg")
@@ -57,6 +59,8 @@ done
 
 echo "══ 2) ملف تالف: تصنيف صحيح + سطر بيانات الملف ══"
 $B open http://localhost:3000 >/dev/null
+$B eval "localStorage.setItem('mahatta-locale','ar'); 'ok'" >/dev/null 2>&1  # الكوكي ميت — الكشف يقرأ localStorage فقط (درس Task 50)
+$B reload >/dev/null 2>&1
 $B wait --load networkidle >/dev/null
 warmup
 R=$(inject "truncated_2000.dwg")
@@ -80,6 +84,8 @@ sleep 0.5
 
 echo "══ 3) انحدار: t_ground.dwg الحقيقي يُفتح ══"
 $B open http://localhost:3000 >/dev/null
+$B eval "localStorage.setItem('mahatta-locale','ar'); 'ok'" >/dev/null 2>&1  # الكوكي ميت — الكشف يقرأ localStorage فقط (درس Task 50)
+$B reload >/dev/null 2>&1
 $B wait --load networkidle >/dev/null
 warmup
 R=$(EV "(async () => {
