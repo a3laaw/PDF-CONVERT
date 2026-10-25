@@ -2,7 +2,8 @@
 
 /* عارض الأوتوكاد — فتح DWG/DXF داخل المتصفح بدون أي خادم
    المحرك: @mlightcad/cad-simple-viewer (MIT) + libredwg-converter (WASM عامل ويب)
-   الميزات: تكبير/تصغير/تحريك، لوحة طبقات بإظهار وإخفاء، تصدير PDF متجهي، طباعة مباشرة */
+   الميزات: تكبير/تصغير/تحريك، لوحة طبقات بإظهار وإخفاء، تصدير PDF متجهي، طباعة مباشرة،
+   تحديد منطقة معينة وطباعتها أو تصديرها PDF وحدها */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -20,6 +21,7 @@ import {
   FileDown,
   Printer,
   Ruler,
+  Crop,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useI18n } from "@/lib/i18n";
@@ -68,6 +70,155 @@ function pinchOf(m: Map<number, Pt>) {
     cx: (a.x + b.x) / 2,
     cy: (a.y + b.y) / 2,
   };
+}
+
+/* ── صناديق العالم للتحديد ── */
+type WorldBox = { minX: number; minY: number; maxX: number; maxY: number };
+
+/* عرض داخلي أعمق من MeasureView — للوصول إلى الرندر والتكبير لصندوق محدد */
+type CadViewInternal = {
+  width: number;
+  height: number;
+  screenToWorld: (p: Pt) => Pt;
+  worldToScreen: (p: Pt) => Pt;
+  zoomTo: (box: unknown, margin?: number) => void;
+  _renderer?: {
+    internalRenderer?: {
+      render?: (...a: unknown[]) => unknown;
+      domElement?: HTMLCanvasElement;
+    };
+  };
+};
+
+/* لقطة الكانفس مع عامل تحويل إحداثيات CSS إلى بكسلات المخزن */
+type Capture = { snap: HTMLCanvasElement; sx: number; sy: number };
+
+/* هل اللقطة فارغة تمامًا (كانفس WebGL مُسح) — فحص بالعيّنة */
+function looksBlank(c: HTMLCanvasElement): boolean {
+  try {
+    const x = c.getContext("2d");
+    if (!x) return true;
+    const d = x.getImageData(0, 0, c.width, c.height).data;
+    let non = 0;
+    const stride = Math.max(4, Math.floor(d.length / 4 / 300) * 4);
+    for (let i = 0; i + 3 < d.length; i += stride)
+      if (d[i] < 240 || d[i + 1] < 240 || d[i + 2] < 240) non++;
+    return non < 2;
+  } catch {
+    return false;
+  }
+}
+
+/* قلب الإضاءة مع حفظ الصبغة والتشبع (HSL) — الأداة الحقيقية في أوتوكاد عند الطباعة:
+   الخلفية الداكنة تصبح بيضاء، الخطوط الفاتحة تصبح داكنة، والألوان تبقى بلونها */
+function invertLightnessKeepHue(p: Uint8ClampedArray): void {
+  for (let i = 0; i + 3 < p.length; i += 4) {
+    const r = p[i] / 255;
+    const g = p[i + 1] / 255;
+    const b = p[i + 2] / 255;
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const l = (mx + mn) / 2;
+    const nl = 1 - l;
+    const d = mx - mn;
+    if (d === 0) {
+      const v = Math.round(255 * nl);
+      p[i] = v;
+      p[i + 1] = v;
+      p[i + 2] = v;
+      continue;
+    }
+    if (nl === l) continue; /* رمادي 50% — لا يتغير */
+    const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    let h: number;
+    if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+    const q = nl < 0.5 ? nl * (1 + s) : nl + s - nl * s;
+    const pp = 2 * nl - q;
+    const f = (tt: number) => {
+      let t = tt;
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return pp + (q - pp) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return pp + (q - pp) * (2 / 3 - t) * 6;
+      return pp;
+    };
+    p[i] = Math.round(255 * f(h + 1 / 3));
+    p[i + 1] = Math.round(255 * f(h));
+    p[i + 2] = Math.round(255 * f(h - 1 / 3));
+  }
+}
+
+/* هل خلفية اللقطة داكنة؟ عيّنات من زوايا الكانفس — الخلفية موحدة فتكفي الزوايا */
+function hasDarkBackground(snap: HTMLCanvasElement): boolean {
+  try {
+    const x = snap.getContext("2d");
+    if (!x) return false;
+    const w = snap.width;
+    const h = snap.height;
+    let dark = 0;
+    const pts = [
+      [2, 2],
+      [w - 3, 2],
+      [2, h - 3],
+      [w - 3, h - 3],
+      [w >> 1, 2],
+      [2, h >> 1],
+      [w - 3, h >> 1],
+      [w >> 1, h - 3],
+    ];
+    for (const [px, py] of pts) {
+      const d = x.getImageData(px, py, 1, 1).data;
+      const l =
+        (Math.max(d[0], d[1], d[2]) + Math.min(d[0], d[1], d[2])) / 2 / 255;
+      if (l < 0.5) dark++;
+    }
+    return dark >= 5;
+  } catch {
+    return false;
+  }
+}
+
+/* قصّ مستطيل (بإحداثيات CSS) من لقطة كاملة — خلفية بيضاء أمانًا للشفافية،
+   وقلب إضاءة تلقائي لو الخلفية داكنة (ناتج جاهز للطباعة على ورق أبيض) */
+function cropCapture(
+  cap: Capture,
+  p1: Pt,
+  p2: Pt
+): { url: string; w: number; h: number } | null {
+  const { snap, sx, sy } = cap;
+  let rx = Math.round(Math.min(p1.x, p2.x) * sx);
+  let ry = Math.round(Math.min(p1.y, p2.y) * sy);
+  let rw = Math.round(Math.abs(p2.x - p1.x) * sx);
+  let rh = Math.round(Math.abs(p2.y - p1.y) * sy);
+  rx = Math.max(0, Math.min(rx, snap.width - 2));
+  ry = Math.max(0, Math.min(ry, snap.height - 2));
+  rw = Math.max(2, Math.min(rw, snap.width - rx));
+  rh = Math.max(2, Math.min(rh, snap.height - ry));
+  if (rw < 8 || rh < 8) return null;
+  const out = document.createElement("canvas");
+  out.width = rw;
+  out.height = rh;
+  const x = out.getContext("2d", { willReadFrequently: true });
+  if (!x) return null;
+  x.fillStyle = "#ffffff";
+  x.fillRect(0, 0, rw, rh);
+  x.drawImage(snap, rx, ry, rw, rh, 0, 0, rw, rh);
+  if (hasDarkBackground(snap)) {
+    try {
+      const d = x.getImageData(0, 0, rw, rh);
+      invertLightnessKeepHue(d.data);
+      x.putImageData(d, 0, 0);
+    } catch {
+      /* بعض البيئات تمنع قراءة بكسلات كانفس WebGL — نُبقي اللقطة كما هي */
+    }
+  }
+  const url = out.toDataURL("image/png");
+  if (!url || url.length < 2000) return null;
+  return { url, w: rw, h: rh };
 }
 
 /* ── فحص جهوزية العمال: ثلاث طبقات تحتمل البوابات الصارمة ──
@@ -128,6 +279,17 @@ export function CadViewer({ fileName, file, onClose }: Props) {
   const mPinchRef = useRef<{ d: number; cx: number; cy: number } | null>(null);
   const mPinchedRef = useRef(false);
 
+  /* ── وضع تحديد منطقة (للطباعة أو التصدير PDF) ── */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selBox, setSelBox] = useState<WorldBox | null>(null); /* بإحداثيات العالم */
+  const [selDrag, setSelDrag] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const selBoxRef = useRef<WorldBox | null>(null);
+  selBoxRef.current = selBox;
+  const selDownRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  const selPtrsRef = useRef<Map<number, Pt>>(new Map());
+  const selPinchRef = useRef<{ d: number; cx: number; cy: number } | null>(null);
+  const selPinchedRef = useRef(false);
+
   const isDwg = /\.dwg$/i.test(file.name);
 
   const getView = useCallback(() => {
@@ -136,6 +298,14 @@ export function CadViewer({ fileName, file, onClose }: Props) {
       typeof mgr.curView.screenToWorld === "function" &&
       typeof mgr.curView.worldToScreen === "function"
       ? mgr.curView
+      : null;
+  }, []);
+
+  const getViewFull = useCallback((): CadViewInternal | null => {
+    const mgr = mgrRef.current as { curView?: CadViewInternal } | null;
+    const v = mgr?.curView;
+    return v && typeof v.screenToWorld === "function" && typeof v.zoomTo === "function"
+      ? v
       : null;
   }, []);
 
@@ -359,9 +529,112 @@ export function CadViewer({ fileName, file, onClose }: Props) {
     if (mgr?.curView) mgr.curView.zoomToFitDrawing();
   }, []);
 
-  /* ── القياس: إعادة رسم دائمة أثناء الوضع — النقاط تلتصق بأماكنها في العالم مهما كبرت أو صغرت ── */
+  /* ── أحداث المؤشر على طبقة التحديد: سحب = مستطيل، قرصة = تكبير ── */
+  const onSelectPointerDown = (e: RPointerEvent<HTMLDivElement>) => {
+    const sp = evScreenPt(e);
+    if (!sp) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* أحداث اصطناعية من الاختبارات بتكسر الالتقاط */
+    }
+    selPtrsRef.current.set(e.pointerId, sp);
+    if (selPtrsRef.current.size === 2) {
+      selPinchedRef.current = true;
+      selPinchRef.current = pinchOf(selPtrsRef.current);
+      setSelDrag(null);
+      selDownRef.current = null;
+      return;
+    }
+    selDownRef.current = { id: e.pointerId, x: sp.x, y: sp.y };
+    setSelDrag({ x1: sp.x, y1: sp.y, x2: sp.x, y2: sp.y });
+  };
+
+  const onSelectPointerMove = (e: RPointerEvent<HTMLDivElement>) => {
+    const sp = evScreenPt(e);
+    if (!sp) return;
+    if (selPtrsRef.current.has(e.pointerId)) selPtrsRef.current.set(e.pointerId, sp);
+    if (selPtrsRef.current.size === 2 && selPinchRef.current) {
+      const p = pinchOf(selPtrsRef.current);
+      const prev = selPinchRef.current.d;
+      if (prev > 0 && Math.abs(p.d - prev) > 2) {
+        const box = boxRef.current?.getBoundingClientRect();
+        if (box)
+          dispatchWheel(
+            box.left + p.cx,
+            box.top + p.cy,
+            ((prev - p.d) / prev) * 300
+          );
+        selPinchRef.current = p;
+      }
+      return;
+    }
+    if (selPtrsRef.current.size > 1) return;
+    setSelDrag((d) => (d ? { ...d, x2: sp.x, y2: sp.y } : d));
+  };
+
+  const onSelectPointerUp = (e: RPointerEvent<HTMLDivElement>) => {
+    const sp = evScreenPt(e);
+    const down = selDownRef.current;
+    selDownRef.current = null;
+    selPtrsRef.current.delete(e.pointerId);
+    if (selPtrsRef.current.size < 2) selPinchRef.current = null;
+    if (selPtrsRef.current.size > 0) return; /* لسه أصابع على الشاشة */
+    const pinched = selPinchedRef.current;
+    selPinchedRef.current = false;
+    const drag = selDrag;
+    setSelDrag(null);
+    if (!sp || !down || down.id !== e.pointerId || pinched || !drag) return;
+    if (Math.hypot(sp.x - down.x, sp.y - down.y) < 8) return; /* نقرة مش سحب */
+    const w1 = screenToWorldSafe({ x: Math.min(drag.x1, sp.x), y: Math.min(drag.y1, sp.y) });
+    const w2 = screenToWorldSafe({ x: Math.max(drag.x1, sp.x), y: Math.max(drag.y1, sp.y) });
+    if (!w1 || !w2) return;
+    setSelBox({
+      minX: Math.min(w1.x, w2.x),
+      minY: Math.min(w1.y, w2.y),
+      maxX: Math.max(w1.x, w2.x),
+      maxY: Math.max(w1.y, w2.y),
+    });
+  };
+
+  const onSelectPointerCancel = (e: RPointerEvent<HTMLDivElement>) => {
+    selPtrsRef.current.delete(e.pointerId);
+    if (selPtrsRef.current.size < 2) selPinchRef.current = null;
+    if (!selPtrsRef.current.size) {
+      selPinchedRef.current = false;
+      selDownRef.current = null;
+      setSelDrag(null);
+    }
+  };
+
+  /* ── القياس والتحديد: Escape يمسح الحالي — ولو مفيش شيء يخرج من الوضع ── */
   useEffect(() => {
-    if (!measure) return;
+    if (!measure && !selectMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (selectMode) {
+        if (selBoxRef.current) {
+          setSelBox(null);
+        } else {
+          setSelectMode(false);
+          setSelDrag(null);
+        }
+        return;
+      }
+      if (mPtsRef.current.length) {
+        setMPts([]);
+        setMCursor(null);
+      } else {
+        setMeasure(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [measure, selectMode]);
+
+  /* ── القياس: إعادة رسم دائمة أثناء الوضعين — الأشياء المرسومة تلتصق بأماكنها في العالم ── */
+  useEffect(() => {
+    if (!measure && !selectMode) return;
     let raf = 0;
     let last = "";
     const loop = () => {
@@ -381,31 +654,37 @@ export function CadViewer({ fileName, file, onClose }: Props) {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [measure, getView]);
-
-  /* ── القياس: Escape يمسح النقاط — ولو مفيش نقاط يخرج من الوضع ── */
-  useEffect(() => {
-    if (!measure) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (mPtsRef.current.length) {
-        setMPts([]);
-        setMCursor(null);
-      } else {
-        setMeasure(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [measure]);
+  }, [measure, selectMode, getView]);
 
   /* ── أزرار القياس ── */
   const toggleMeasure = () => {
     if (measure) {
       setMPts([]);
       setMCursor(null);
+    } else {
+      /* دخول القياس يغلق وضع التحديد — وضع واحد نشط في كل وقت */
+      setSelectMode(false);
+      setSelBox(null);
+      setSelDrag(null);
     }
     setMeasure(!measure);
+  };
+
+  /* ── أزرار تحديد المنطقة ── */
+  const toggleSelect = () => {
+    if (selectMode) {
+      setSelectMode(false);
+      setSelBox(null);
+      setSelDrag(null);
+    } else {
+      /* دخول التحديد يغلق القياس */
+      setMeasure(false);
+      setMPts([]);
+      setMCursor(null);
+      setSelBox(null);
+      setSelDrag(null);
+      setSelectMode(true);
+    }
   };
 
   const clearMeasure = () => {
@@ -503,14 +782,106 @@ export function CadViewer({ fileName, file, onClose }: Props) {
     }
   }, [busy]);
 
-  /* ── طباعة مباشرة: لقطة الكانفس الحالي في نافذة طباعة ── */
-  const printView = useCallback(() => {
-    const canvas = boxRef.current?.querySelector("canvas");
-    if (!canvas) return;
-    try {
-      const url = (canvas as HTMLCanvasElement).toDataURL("image/png");
-      if (!url || url.length < 2000)
-        throw new Error("لقطة فارغة");
+  /* ── التقاط إطار مضمون من كانفس WebGL ──
+     العارض يُنشئ السياق بـ preserveDrawingBuffer:false — أي قراءة خارج مهمة الرسم
+     تعطي صورة فارغة (مثبت بالفحص). الحل: نغلّف render الداخلي ونقرأ داخل نفس
+     مهمة الرسم — البكسلات سليمة حتميًا. captureOn = رقم الإطار المطلوب التقاطه
+     (2 = بعد نبضة الرجوع في زوج عجلة متعاكِس، 1 = أول إطار مباشرة) ── */
+  const captureFrame = useCallback(
+    (opts?: { trigger?: () => void; captureOn?: number }): Promise<Capture | null> => {
+      const view = getViewFull();
+      const ir = view?._renderer?.internalRenderer;
+      const canvas =
+        (boxRef.current?.querySelector("canvas") as HTMLCanvasElement | null) ??
+        ir?.domElement ??
+        null;
+      if (!view || !canvas) return Promise.resolve(null);
+      const readNow = (): Capture | null => {
+        try {
+          const c2 = document.createElement("canvas");
+          c2.width = canvas.width;
+          c2.height = canvas.height;
+          const x = c2.getContext("2d");
+          if (!x) return null;
+          x.fillStyle = "#ffffff";
+          x.fillRect(0, 0, c2.width, c2.height);
+          x.drawImage(canvas, 0, 0);
+          if (looksBlank(c2)) return null;
+          return {
+            snap: c2,
+            sx: c2.width / Math.max(1, canvas.clientWidth || c2.width),
+            sy: c2.height / Math.max(1, canvas.clientHeight || c2.height),
+          };
+        } catch {
+          return null;
+        }
+      };
+      const captureOn = Math.max(1, opts?.captureOn ?? 1);
+      return new Promise<Capture | null>((resolve) => {
+        let settled = false;
+        let n = 0;
+        let orig: ((...a: unknown[]) => unknown) | null = null;
+        const finish = (v: Capture | null) => {
+          if (settled) return;
+          settled = true;
+          if (orig && ir) {
+            try {
+              ir.render = orig;
+            } catch {
+              /* لا شيء */
+            }
+          }
+          resolve(v);
+        };
+        if (ir && typeof ir.render === "function") {
+          orig = ir.render.bind(ir);
+          ir.render = function (...args: unknown[]) {
+            const out = orig ? orig.apply(ir, args) : undefined;
+            n++;
+            if (!settled && n >= captureOn) finish(readNow());
+            return out;
+          };
+        }
+        let tries = 0;
+        const attempt = () => {
+          if (settled) return;
+          tries++;
+          /* بعد 4 محاولات نقرأ مباشرة — بعض البناءات تسمح بذلك */
+          if (tries > 4) {
+            finish(readNow());
+            return;
+          }
+          n = 0;
+          try {
+            opts?.trigger?.();
+          } catch {
+            /* الزناد فشل — المحاولة التالية */
+          }
+          window.setTimeout(attempt, 750);
+        };
+        attempt();
+      });
+    },
+    [getViewFull]
+  );
+
+  /* نبضة عجلة متعاكِسة في مركز الرسم: إطار جديد بلا أي تغيير يُرى
+     (التكبير حول نفس النقطة بمعامل ومعاكسه = نفس الكاميرا تمامًا) */
+  const wheelPairTrigger = useCallback(() => {
+    const box = boxRef.current?.getBoundingClientRect();
+    if (!box) return;
+    const cx = box.left + box.width / 2;
+    const cy = box.top + box.height / 2;
+    dispatchWheel(cx, cy, -50);
+    window.setTimeout(() => dispatchWheel(cx, cy, 50), 90);
+    /* المحاولات التالية لو المُصيّر جمع النبضتين في إطار واحد */
+    window.setTimeout(() => dispatchWheel(cx, cy, -50), 300);
+    window.setTimeout(() => dispatchWheel(cx, cy, 50), 380);
+  }, []);
+
+  /* نافذة الطباعة المشتركة: صورة PNG داخل صفحة بيضاء تطبع فور جاهزيتها */
+  const openPrintWindow = useCallback(
+    (url: string) => {
       const w = window.open("", "_blank", "width=980,height=720");
       if (!w) {
         toast.error(t("cad.printBlocked"));
@@ -523,10 +894,133 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
 <body><img src="${url}" alt="" onload="setTimeout(()=>window.print(),150)"></body></html>`
       );
       w.document.close();
+    },
+    [fileName, t]
+  );
+
+  /* صناديق هندسية للتحديد: صندوق التحديد + صندوق الكاميرا الحالية للرجوع */
+  const buildSelGeoms = useCallback(async () => {
+    const view = getViewFull();
+    const sel = selBoxRef.current;
+    if (!view || !view.width || !view.height || !sel) return null;
+    const { AcGeBox2d, AcGeVector2d } = await import("@mlightcad/geometry-engine");
+    const tl = view.screenToWorld({ x: 0, y: 0 });
+    const br = view.screenToWorld({ x: view.width, y: view.height });
+    const saved = new AcGeBox2d().expandByPoint(tl).expandByPoint(br);
+    const selGeom = new AcGeBox2d(
+      new AcGeVector2d(Math.min(sel.minX, sel.maxX), Math.min(sel.minY, sel.maxY)),
+      new AcGeVector2d(Math.max(sel.minX, sel.maxX), Math.max(sel.minY, sel.maxY))
+    );
+    return { view, saved, selGeom } as const;
+  }, [getViewFull]);
+
+  /* ── طباعة مباشرة: لقطة مضمونة للعرض الحالي في نافذة طباعة (بخلفية بيضاء) ── */
+  const printView = useCallback(async () => {
+    if (busy) return;
+    setBusy("print");
+    try {
+      const cap = await captureFrame({ trigger: wheelPairTrigger, captureOn: 2 });
+      const crop = cap
+        ? cropCapture(
+            cap,
+            { x: 0, y: 0 },
+            { x: cap.snap.width / cap.sx, y: cap.snap.height / cap.sy }
+          )
+        : null;
+      if (!crop) throw new Error("لقطة فارغة");
+      openPrintWindow(crop.url);
     } catch {
       toast.info(t("cad.printFallback"));
+    } finally {
+      setBusy("");
     }
-  }, [fileName]);
+  }, [busy, captureFrame, wheelPairTrigger, openPrintWindow, t]);
+
+  /* ── تصدير المنطقة المحددة PDF: تكبير للمنطقة ← التقاط ← قصّ دقيق ← pdf-lib ── */
+  const exportSelectionPdf = useCallback(async () => {
+    if (busy || !selBox) return;
+    setBusy("selpdf");
+    let restore: (() => void) | null = null;
+    try {
+      const g = await buildSelGeoms();
+      if (!g) throw new Error("noselection");
+      restore = () => {
+        try {
+          g.view.zoomTo(g.saved, 1);
+        } catch {
+          /* الرجوع أفضل جهد */
+        }
+      };
+      /* تمريرة الجودة: التكبير حتى يملأ التحديد الشاشة — الالتقاط بأقصى دقة متاحة */
+      g.view.zoomTo(g.selGeom, 1.02);
+      const cap = await captureFrame({ captureOn: 1 });
+      if (!cap) throw new Error("capture");
+      /* حساب مستطيل التحديد على الشاشة والكاميرا ما زالت مؤطرة للتحديد */
+      const sel = selBoxRef.current;
+      if (!sel) throw new Error("noselection");
+      const p1 = g.view.worldToScreen({ x: sel.minX, y: sel.maxY });
+      const p2 = g.view.worldToScreen({ x: sel.maxX, y: sel.minY });
+      const crop = cropCapture(cap, p1, p2);
+      if (!crop) throw new Error("crop");
+      const { PDFDocument } = await import("pdf-lib");
+      const pdf = await PDFDocument.create();
+      pdf.setTitle(fileName.replace(/\.[^.]+$/, "") || fileName);
+      const im = await pdf.embedPng(crop.url);
+      /* 96dpi بكسل ← 72pt نقطة طباعة */
+      const wPt = Math.max(72, crop.w * 0.75);
+      const hPt = Math.max(72, crop.h * 0.75);
+      const page = pdf.addPage([wPt, hPt]);
+      page.drawImage(im, { x: 0, y: 0, width: wPt, height: hPt });
+      const bytes = await pdf.save({ useObjectStreams: true });
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${fileName.replace(/\.[^.]+$/, "") || "drawing"}-${t("cad.selFileSuffix")}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast.success(t("cad.selPdfToast"));
+    } catch {
+      toast.error(t("cad.selFail"));
+    } finally {
+      restore?.();
+      setBusy("");
+    }
+  }, [busy, selBox, buildSelGeoms, captureFrame, fileName, t]);
+
+  /* ── طباعة المنطقة المحددة فقط ── */
+  const printSelection = useCallback(async () => {
+    if (busy || !selBox) return;
+    setBusy("selprint");
+    let restore: (() => void) | null = null;
+    try {
+      const g = await buildSelGeoms();
+      if (!g) throw new Error("noselection");
+      restore = () => {
+        try {
+          g.view.zoomTo(g.saved, 1);
+        } catch {
+          /* الرجوع أفضل جهد */
+        }
+      };
+      g.view.zoomTo(g.selGeom, 1.02);
+      const cap = await captureFrame({ captureOn: 1 });
+      const sel = selBoxRef.current;
+      if (!cap || !sel) throw new Error("capture");
+      const p1 = g.view.worldToScreen({ x: sel.minX, y: sel.maxY });
+      const p2 = g.view.worldToScreen({ x: sel.maxX, y: sel.minY });
+      const crop = cropCapture(cap, p1, p2);
+      if (!crop) throw new Error("crop");
+      openPrintWindow(crop.url);
+    } catch {
+      toast.error(t("cad.selFail"));
+    } finally {
+      restore?.();
+      setBusy("");
+    }
+  }, [busy, selBox, buildSelGeoms, captureFrame, openPrintWindow, t]);
 
   /* ── تبديل طبقة ── */
   const toggleLayer = (name: string, on: boolean) => {
@@ -586,6 +1080,28 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
       ? mPts.slice(1).reduce((s, p, i) => s + ptDist(mPts[i], p), 0)
       : 0;
 
+  /* ── حسابات التحديد للإطار الحالي (إحداثيات العالم → شاشة) ── */
+  const selRect = (() => {
+    if (!selectMode || !selBox) return null;
+    const a = worldToScreenSafe({ x: selBox.minX, y: selBox.maxY });
+    const b = worldToScreenSafe({ x: selBox.maxX, y: selBox.minY });
+    if (!a || !b) return null;
+    return {
+      x: Math.min(a.x, b.x),
+      y: Math.min(a.y, b.y),
+      w: Math.abs(b.x - a.x),
+      h: Math.abs(b.y - a.y),
+    };
+  })();
+  const dragRect = selectMode && selDrag
+    ? {
+        x: Math.min(selDrag.x1, selDrag.x2),
+        y: Math.min(selDrag.y1, selDrag.y2),
+        w: Math.abs(selDrag.x2 - selDrag.x1),
+        h: Math.abs(selDrag.y2 - selDrag.y1),
+      }
+    : null;
+
   return (
     <div
       className="fixed inset-0 z-50 flex flex-col bg-slate-900"
@@ -611,9 +1127,11 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
               ? status.startsWith("k:")
                 ? t(status.slice(2))
                 : status
-              : measure
-                ? t("cad.measureHint")
-                : t("cad.wheelHint")} · {t("ed.inBrowser")}
+              : selectMode
+                ? t("cad.selectHint")
+                : measure
+                  ? t("cad.measureHint")
+                  : t("cad.wheelHint")} · {t("ed.inBrowser")}
           </p>
         </div>
         <span className="flex-1" />
@@ -660,6 +1178,24 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
         >
           <Ruler className="size-4" aria-hidden />
           <span className="hidden sm:inline">{t("cad.measure")}</span>
+        </button>
+        {/* زر تحديد منطقة — طباعة أو تصدير جزء محدد فقط */}
+        <button
+          onClick={toggleSelect}
+          aria-label={t("cad.selectArea")}
+          aria-pressed={selectMode}
+          data-testid="cad-select-btn"
+          title={t("cad.selectArea")}
+          disabled={!!error}
+          className={cn(
+            "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition disabled:opacity-40",
+            selectMode
+              ? "bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/25"
+              : "border border-white/15 bg-white/5 text-slate-300 hover:text-white"
+          )}
+        >
+          <Crop className="size-4" aria-hidden />
+          <span className="hidden sm:inline">{t("cad.selectArea")}</span>
         </button>
         {layers && layers.length > 0 && (
           <button
@@ -864,6 +1400,88 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
           </div>
         )}
 
+        {/* ══ وضع تحديد المنطقة: طبقة السحب + تعتيم خارج التحديد ══ */}
+        {selectMode && (
+          <div
+            className="absolute inset-0 z-20 cursor-crosshair"
+            style={{ touchAction: "none" }}
+            data-testid="cad-select-layer"
+            onPointerDown={onSelectPointerDown}
+            onPointerMove={onSelectPointerMove}
+            onPointerUp={onSelectPointerUp}
+            onPointerCancel={onSelectPointerCancel}
+            onWheel={forwardWheel}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <svg className="absolute inset-0 size-full overflow-visible">
+              <defs>
+                <mask id="cad-sel-mask">
+                  <rect x="0" y="0" width="100%" height="100%" fill="white" />
+                  {dragRect && (
+                    <rect x={dragRect.x} y={dragRect.y} width={dragRect.w} height={dragRect.h} fill="black" />
+                  )}
+                  {!dragRect && selRect && (
+                    <rect x={selRect.x} y={selRect.y} width={selRect.w} height={selRect.h} fill="black" />
+                  )}
+                </mask>
+              </defs>
+              {(dragRect || selRect) && (
+                <rect
+                  x="0"
+                  y="0"
+                  width="100%"
+                  height="100%"
+                  fill="rgba(2,6,23,0.55)"
+                  mask="url(#cad-sel-mask)"
+                />
+              )}
+              {dragRect && (
+                <rect
+                  x={dragRect.x}
+                  y={dragRect.y}
+                  width={dragRect.w}
+                  height={dragRect.h}
+                  fill="rgba(34,211,238,0.10)"
+                  stroke="#22d3ee"
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                />
+              )}
+              {selRect && (
+                <g data-testid="cad-select-rect">
+                  <rect
+                    x={selRect.x}
+                    y={selRect.y}
+                    width={selRect.w}
+                    height={selRect.h}
+                    fill="rgba(34,211,238,0.08)"
+                    stroke="#22d3ee"
+                    strokeWidth={2.5}
+                    strokeDasharray="9 5"
+                  />
+                  {[
+                    [selRect.x, selRect.y],
+                    [selRect.x + selRect.w, selRect.y],
+                    [selRect.x, selRect.y + selRect.h],
+                    [selRect.x + selRect.w, selRect.y + selRect.h],
+                  ].map(([cx, cy], i) => (
+                    <rect
+                      key={i}
+                      x={cx - 4}
+                      y={cy - 4}
+                      width={8}
+                      height={8}
+                      fill="#22d3ee"
+                      stroke="#0e7490"
+                      strokeWidth={1.5}
+                    />
+                  ))}
+                </g>
+              )}
+            </svg>
+          </div>
+        )}
+
         {/* ══ لوحة قراءات القياس ══ */}
         {measure && (
           <div
@@ -958,6 +1576,97 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
               <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">
                 {t("cad.mScaleHint")}
               </span>
+            </div>
+          </div>
+        )}
+
+        {/* ══ لوحة تحديد المنطقة: الأبعاد + الطباعة والتصدير ══ */}
+        {selectMode && (
+          <div
+            className="absolute bottom-3 left-1/2 z-30 w-[min(94%,470px)] -translate-x-1/2 rounded-2xl border border-cyan-400/25 bg-slate-950/95 p-3 shadow-2xl backdrop-blur"
+            data-testid="cad-select-chip"
+          >
+            <div className="flex items-center gap-2">
+              <Crop className="size-4 shrink-0 text-cyan-400" aria-hidden />
+              <p className="min-w-0 flex-1 truncate text-[11px] font-bold text-slate-300">
+                {selBox ? t("cad.selReady") : t("cad.selNone")}
+              </p>
+              <button
+                onClick={() => setSelBox(null)}
+                aria-label={t("cad.selClear")}
+                data-testid="cad-select-clear"
+                disabled={!selBox}
+                className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-extrabold text-slate-300 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+              >
+                {t("cad.selClear")}
+              </button>
+              <button
+                onClick={() => {
+                  setSelectMode(false);
+                  setSelBox(null);
+                  setSelDrag(null);
+                }}
+                aria-label={t("cad.mExit")}
+                data-testid="cad-select-exit"
+                className="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-extrabold text-white transition hover:bg-white/20"
+              >
+                {t("cad.mExit")}
+              </button>
+            </div>
+            <div className="mt-2 flex items-end justify-between gap-3">
+              <div className="min-w-0 shrink-0" data-testid="cad-select-dims">
+                {selBox ? (
+                  <>
+                    <p className="text-[10.5px] font-bold leading-none text-slate-400">
+                      {t("cad.selDims")}
+                    </p>
+                    <p
+                      className="mt-1 font-extrabold leading-none text-cyan-300"
+                      style={{ direction: "ltr" }}
+                    >
+                      <span className="text-lg">
+                        {fmtLen((selBox.maxX - selBox.minX) * mScale)}
+                      </span>
+                      <span className="mx-1 text-cyan-500/70">×</span>
+                      <span className="text-lg">
+                        {fmtLen((selBox.maxY - selBox.minY) * mScale)}
+                      </span>
+                      <span className="ml-1 text-[10px] text-slate-400">
+                        {t("cad.mUnit")}
+                      </span>
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-[10.5px] leading-relaxed text-slate-500">
+                    {t("cad.selHint2")}
+                  </p>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!selBox || !!busy}
+                  onClick={printSelection}
+                  aria-label={t("cad.selPrint")}
+                  data-testid="cad-select-print"
+                  className="border-white/20 bg-white/5 px-3 font-extrabold text-white hover:bg-white/10"
+                >
+                  <Printer className="size-4" aria-hidden />
+                  {busy === "selprint" ? t("cad.selExporting") : t("cad.selPrint")}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!selBox || !!busy}
+                  onClick={exportSelectionPdf}
+                  aria-label={t("cad.selPdf")}
+                  data-testid="cad-select-pdf"
+                  className="bg-cyan-600 px-3 font-extrabold text-white hover:bg-cyan-700"
+                >
+                  <FileDown className="size-4" aria-hidden />
+                  {busy === "selpdf" ? t("cad.selExporting") : t("cad.selPdf")}
+                </Button>
+              </div>
             </div>
           </div>
         )}

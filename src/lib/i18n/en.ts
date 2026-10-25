@@ -280,6 +280,21 @@ export const en: Record<string, string> = {
   "cad.mClear": "Clear",
   "cad.mExit": "Exit measuring",
 
+  /* Area selection — print or export a selected part only */
+  "cad.selectArea": "Select area",
+  "cad.selectHint": "Drag on the drawing to select just the area you need — then print it or export it as PDF",
+  "cad.selNone": "No area selected yet",
+  "cad.selHint2": "Drag a rectangle around the part you want",
+  "cad.selReady": "Area selected — print it or export it as PDF",
+  "cad.selDims": "Selection size",
+  "cad.selPrint": "Print selection",
+  "cad.selPdf": "Export selection PDF",
+  "cad.selClear": "Clear selection",
+  "cad.selExporting": "Preparing selection…",
+  "cad.selFail": "Could not prepare the selected area — reselect it or try a wider area",
+  "cad.selPdfToast": "Selection PDF is ready and downloading",
+  "cad.selFileSuffix": "selection",
+
   "msg.selectPdfOrImage": "Select a PDF or an image from the file list first",
   "msg.forImages": "That tool is for images — select an image from the list",
   "msg.forPdfUseImages": "That tool is for PDFs — for images use “From images”",

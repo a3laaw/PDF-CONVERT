@@ -280,6 +280,21 @@ export const hi: Record<string, string> = {
   "cad.mClear": "साफ़",
   "cad.mExit": "माप बंद करें",
 
+  /* क्षेत्र चयन — चयनित हिस्सा ही प्रिंट या PDF निर्यात */
+  "cad.selectArea": "क्षेत्र चुनें",
+  "cad.selectHint": "ड्रॉइंग पर खींचकर सिर्फ़ वही हिस्सा चुनें जो आपको चाहिए — फिर उसे प्रिंट करें या PDF निर्यात करें",
+  "cad.selNone": "अभी कोई क्षेत्र नहीं चुना गया",
+  "cad.selHint2": "जो हिस्सा चाहिए उसके चारों ओर आयत खींचें",
+  "cad.selReady": "क्षेत्र चुन लिया गया — प्रिंट करें या PDF निर्यात करें",
+  "cad.selDims": "चयन का आकार",
+  "cad.selPrint": "चयन प्रिंट करें",
+  "cad.selPdf": "चयन PDF निर्यात करें",
+  "cad.selClear": "चयन साफ़ करें",
+  "cad.selExporting": "चयन तैयार हो रहा है…",
+  "cad.selFail": "चयनित क्षेत्र तैयार नहीं हो सका — दोबारा चुनें या बड़ा क्षेत्र आज़माएँ",
+  "cad.selPdfToast": "चयनित क्षेत्र की PDF तैयार है और डाउनलोड हो रही है",
+  "cad.selFileSuffix": "selection",
+
   "msg.selectPdfOrImage": "पहले लिस्ट से PDF या फोटो चुनें",
   "msg.forImages": "यह टूल फोटो के लिए है — लिस्ट से फोटो चुनें",
   "msg.forPdfUseImages": "यह टूल PDF के लिए है — फोटो के लिए «फोटो से PDF» लें",
