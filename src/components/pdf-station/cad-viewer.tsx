@@ -300,6 +300,43 @@ function classifyOpenError(err: unknown): OpenFailKind {
   return "crash";
 }
 
+/* ── المسار الإسعافي: تحويل DWG→DXF داخليًا بمحرك LibreDWG مباشرة ──
+   انهيار «conversion stage» يحدث في طبقات تحويل JS فوق الـWASM (convertEx ثم
+   طبقات AcDb) وليس في تحليل WASM نفسه — كاتب DXF الأصلي داخل WASM
+   (dwg_write_dxf) يتخطى كل هذه الطبقات فينجح كثيرًا حيث ينهار كل شيء.
+   الناتج يُفتح عبر مسار DXF المستقل (dxf-json — كود تحويل مختلف تمامًا
+   وأكثر تحمّلًا) — أي أتمتة الحل الذي كنا نقترحه على المستخدم يدويًا
+   في أوتوكاد. الفشل هنا يُلتقط ولا يُسقط الصفحة، والنسخة الميتة من المحرك
+   (wasm abort) تُصفَّر كي تُبنى طازجة في محاولة لاحقة */
+type DwgToDxfFn = (raw: ArrayBuffer) => Promise<Uint8Array | null>;
+let cadDwgToDxfFn: DwgToDxfFn | null = null;
+function cadDwgToDxf(raw: ArrayBuffer): Promise<Uint8Array | null> {
+  if (!cadDwgToDxfFn) {
+    cadDwgToDxfFn = async (buf) => {
+      const { LibreDwg } = await import("@mlightcad/libredwg-web");
+      try {
+        const dwg = await LibreDwg.create("/workers");
+        const out = dwg.dwg_write_dxf(buf);
+        return out ?? null;
+      } catch (e) {
+        try {
+          (LibreDwg as unknown as { instance?: unknown }).instance = null;
+        } catch {
+          /* التصفير احتياطي فقط */
+        }
+        throw e;
+      }
+    };
+  }
+  return cadDwgToDxfFn(raw);
+}
+/* خطاف فحص للتطوير فقط — E2E يختبر المحرك الإسعافي في السياق الحقيقي
+ * (يرفق على مستوى الوحدة ليظهر بمجرد تحميل العارض قبل أي فشل فعلي) */
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as unknown as { __cadDwgToDxf?: DwgToDxfFn }).__cadDwgToDxf =
+    (raw) => cadDwgToDxf(raw);
+}
+
 /* ── ضجيج الكيانات التالفة: المكتبة ترمي Illegal Parameters عند كيانات معطوبة
    (قوس/سبلاين بصفر قطر أو نقاط متطابقة) أثناء تحويل الكيانات ثم تتجاهله عمدًا
    وتكمل الفتح — فشل مرحلة ENTITY غير حرج بالتصميم (AcDbDatabaseConverter:
@@ -639,6 +676,17 @@ export function CadViewer({ fileName, file, onClose }: Props) {
   const isDwg = /\.dwg$/i.test(file.name);
   /* عدّاد إعادة فتح يدوي — زر «أعد المحاولة» في حوار الخطأ يعيد تشغيل دورة الفتح كاملة */
   const [openTick, setOpenTick] = useState(0);
+  /* تشخيص آخر فشل — زر «انسخ تقرير الخطأ» يرسله للمستخدم فيلصقه لنا فنعرف
+   * صنف الانهيار بدقة (النوع/الرمز/المرحلة/نتيجة المسار الإسعافي) دون الملف نفسه */
+  const diagRef = useRef<{
+    kind: string;
+    code: string;
+    msg: string;
+    meta: string;
+    fallback: string;
+    at: string;
+  } | null>(null);
+  const [reportCopied, setReportCopied] = useState(false);
 
   const getView = useCallback(() => {
     const mgr = mgrRef.current as { curView?: MeasureView } | null;
@@ -785,8 +833,9 @@ export function CadViewer({ fileName, file, onClose }: Props) {
         /* معلومات الملف للعرض: الإصدار والحجم — تبقى ظاهرة في رسائل الخطأ أيضًا */
         const ver = isDwg ? dwgVersionLabel(buf) : "";
         const sizeText = fmtSizeText(buf.byteLength);
+        const metaText = isDwg && ver ? `DWG ${ver} · ${sizeText}` : file.name;
         if (isDwg && ver) {
-          setFileMeta(`DWG ${ver} · ${sizeText}`);
+          setFileMeta(metaText);
           setStatus(t("cad.readingDwgInfo", { version: ver, size: sizeText }));
         }
         /* نسخة احتياطية للبيانات — openDocument قد تنقل المخزن للعامل فتنفصل */
@@ -805,7 +854,7 @@ export function CadViewer({ fileName, file, onClose }: Props) {
         /* محاولتان: أخطاء العمال العابرة (سباقات التهيئة/النقل) تعتذر غالبًا من الثانية.
          * كل محاولة ملفوفة بحارسين: مراقبة سجل فشل التحليل (الوعد لا يُحسم عند انهيار
          * العامل) وحارس زمني شامل 5.5 د فوق مهلة المحوّل */
-        const attemptOpen = (buffer: ArrayBuffer) =>
+        const attemptOpen = (buffer: ArrayBuffer, name: string = file.name) =>
           new Promise<boolean>((resolve, reject) => {
             let settled = false;
             const finish = (fn: () => void) => {
@@ -826,7 +875,7 @@ export function CadViewer({ fileName, file, onClose }: Props) {
               finish(() => reject(new Error("open watchdog timeout")));
             }, 330000);
             manager
-              .openDocument(file.name, buffer, { mode: AcEdOpenMode.Read })
+              .openDocument(name, buffer, { mode: AcEdOpenMode.Read })
               .then((v) => finish(() => resolve(v)))
               .catch((e) => finish(() => reject(e)));
           });
@@ -842,8 +891,54 @@ export function CadViewer({ fileName, file, onClose }: Props) {
             /* أخطاء المحرك تصل إنجليزية خام — نصنفها ونعطي رسالة عربية مفيدة */
             if (!alive) return;
             failKind = classifyOpenError(openErr);
+            diagRef.current = {
+              kind: failKind,
+              code:
+                typeof openErr === "object" && openErr && "code" in openErr
+                  ? String((openErr as { code?: unknown }).code)
+                  : "",
+              msg: String(
+                openErr instanceof Error ? openErr.message : openErr
+              ).slice(0, 400),
+              meta: metaText,
+              fallback: "not-tried",
+              at: new Date().toISOString(),
+            };
             /* الملف غير صالح أو انتهت المهلة — إعادة المحاولة لا تفيد */
             if (failKind === "invalid" || failKind === "timeout") break;
+            ok = false;
+          }
+        }
+        /* ── المسار الإسعافي — DWG فقط وفشل نوعه انهيار/ذاكرة ──
+         * نحوّل الملف داخليًا إلى DXF بكاتب WASM الأصلي (يتخطى طبقات التحويل
+         * التي ينهار فيها كل شيء) ثم نفتح الناتج عبر مسار DXF المستقل.
+         * مكافئ لأمر Save As → DXF في أوتوكاد لكنه تلقائي داخل المتصفح */
+        if (!ok && isDwg && (failKind === "oom" || failKind === "crash")) {
+          try {
+            setStatus("k:cad.dxfFallback");
+            /* فرصة للرسم قبل حجب الخيط الرئيسي بتحويل WASM المتزامن */
+            await new Promise((r) => setTimeout(r, 80));
+            if (!alive) return;
+            const dxfBytes = await cadDwgToDxf(buf);
+            const head = dxfBytes
+              ? new TextDecoder().decode(dxfBytes.slice(0, 64))
+              : "";
+            if (dxfBytes && /section/i.test(head)) {
+              if (diagRef.current) diagRef.current.fallback = "dxf-written";
+              const dxfBuf = dxfBytes.slice().buffer as ArrayBuffer;
+              const dxfName = file.name.replace(/\.dwg$/i, "") + ".dxf";
+              ok = await attemptOpen(dxfBuf, dxfName);
+              if (diagRef.current)
+                diagRef.current.fallback = ok ? "dxf-open-ok" : "dxf-open-failed";
+            } else if (diagRef.current) {
+              diagRef.current.fallback = "dxf-write-failed";
+            }
+          } catch (fbErr) {
+            if (!alive) return;
+            if (diagRef.current)
+              diagRef.current.fallback = `dxf-fallback-error: ${String(
+                fbErr instanceof Error ? fbErr.message : fbErr
+              ).slice(0, 120)}`;
             ok = false;
           }
         }
@@ -1701,6 +1796,78 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
                       {t("ws.cancel")}
                     </Button>
                   </div>
+                  {/* تقرير التشخيص: نسخة صغيرة بلا بيانات الملف نفسها —
+                     المستخدم يلصقه لنا فنعرف صنف الانهيار بدقة */}
+                  <button
+                    onClick={async () => {
+                      const d = diagRef.current;
+                      const report = {
+                        app: "muhawwil-pdf · cad-viewer",
+                        file: d?.meta ?? fileMeta ?? file.name,
+                        failKind: d?.kind ?? "unknown",
+                        code: d?.code ?? "",
+                        detail: d?.msg ?? "",
+                        dxfFallback: d?.fallback ?? "not-tried",
+                        engines: {
+                          libredwgWeb: "0.8.2",
+                          dataModel: "1.15.14",
+                          simpleViewer: "1.7.6",
+                        },
+                        ua:
+                          typeof navigator !== "undefined"
+                            ? navigator.userAgent
+                            : "",
+                        deviceMemoryGB: (
+                          navigator as unknown as { deviceMemory?: number }
+                        ).deviceMemory,
+                        time: d?.at ?? new Date().toISOString(),
+                      };
+                      const text = JSON.stringify(report, null, 2);
+                      /* خطاف فحص للتطوير — E2E يتحقق من محتوى التقرير
+                       * (الحافظة نفسها مقيدة في المتصفح الآلي) */
+                      if (process.env.NODE_ENV !== "production") {
+                        (window as unknown as { __cadLastReport?: string })
+                          .__cadLastReport = text;
+                      }
+                      /* النسخ المتزامن أولًا — داخل إيماءة النقر (execCommand
+                       * يفشل بعد await لأن الإيماءة تنتهي)، والـAPI غير
+                       * المتزامن احتياطًا للمتصفحات الحديثة */
+                      const copyViaExec = () => {
+                        try {
+                          const ta = document.createElement("textarea");
+                          ta.value = text;
+                          ta.style.position = "fixed";
+                          ta.style.opacity = "0";
+                          document.body.appendChild(ta);
+                          ta.select();
+                          const ok = document.execCommand("copy");
+                          ta.remove();
+                          return ok;
+                        } catch {
+                          return false;
+                        }
+                      };
+                      let done = copyViaExec();
+                      if (!done) {
+                        try {
+                          await navigator.clipboard.writeText(text);
+                          done = true;
+                        } catch {
+                          done = false;
+                        }
+                      }
+                      if (done) {
+                        setReportCopied(true);
+                        setTimeout(() => setReportCopied(false), 2400);
+                      }
+                    }}
+                    data-testid="cad-copy-report"
+                    className="mt-3 block w-full text-center text-[11px] font-bold text-red-200/60 underline underline-offset-2 hover:text-red-100"
+                  >
+                    {reportCopied
+                      ? t("cad.reportCopied")
+                      : t("cad.copyReport")}
+                  </button>
                 </>
               ) : (
                 <>
