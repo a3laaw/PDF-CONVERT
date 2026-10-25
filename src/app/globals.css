@@ -171,3 +171,45 @@ body {
 html[lang="hi"] body {
   font-family: var(--font-hindi), var(--font-tajawal), system-ui, sans-serif;
 }
+
+/* ── العجلة السينمائية ── */
+/* جزيئات عائمة خفيفة في الخلفية */
+@keyframes wheel-float {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateY(-16px);
+    opacity: 0.95;
+  }
+}
+.wheel-float {
+  animation: wheel-float 16s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+/* دوران بطيء دائم: شارة الشعار بعقارب الساعة + أيقونة المحور عكسيًا */
+@keyframes wheel-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.wheel-spin-slow {
+  animation: wheel-rotate 14s linear infinite;
+}
+.wheel-spin-rev {
+  animation: wheel-rotate 22s linear infinite reverse;
+}
+
+/* توهج قطاع العجلة عند التحويم */
+.wheel-seg-fill {
+  transition:
+    fill 0.3s ease,
+    stroke 0.3s ease,
+    filter 0.3s ease;
+}
+.wheel-seg-fill:hover {
+  filter: drop-shadow(0 0 14px var(--seg-glow, rgba(79, 85, 227, 0.35)));
+}

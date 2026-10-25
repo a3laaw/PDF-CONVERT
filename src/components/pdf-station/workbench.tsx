@@ -3,7 +3,7 @@
 /* شاشة العمل الجديدة — عرض الملف + شريط أدوات واحد، بدون أوامر نصية ولا شرح */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, FileOutput, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
+import { Check, Copy, FileOutput, Pencil, RotateCw, Trash2, X } from "lucide-react";
 import { useWorkspace } from "@/store/workspace";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
@@ -15,6 +15,7 @@ import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { MergePagesPanel } from "@/components/pdf-station/merge-pages-panel";
 import { SignaturePanel } from "@/components/pdf-station/signature-panel";
 import { CropPanel } from "@/components/pdf-station/crop-panel";
+import { ServiceWheel, type ServicePick } from "@/components/pdf-station/service-wheel";
 import { toHindiDigits } from "@/lib/arabic";
 import { useI18n, toolKey } from "@/lib/i18n";
 import { toast } from "sonner";
@@ -333,6 +334,9 @@ export function Workbench() {
   const [dragOver, setDragOver] = useState(false);
   const [editing, setEditing] = useState(false);
   const [cadOpen, setCadOpen] = useState(false);
+  /* العجلة السينمائية: فلتر منتقي الملفات + الخدمة المنتظرة (تُفعّل أداة بعد إضافة الملفات) */
+  const [acceptTypes, setAcceptTypes] = useState(".pdf,image/*");
+  const [pendingSvc, setPendingSvc] = useState<ServicePick | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const thumbsReq = useRef<Set<string>>(new Set());
   const bottomBarRef = useRef<HTMLDivElement>(null);
@@ -436,6 +440,35 @@ export function Workbench() {
       );
     }
   };
+
+  /* أحدث مرجع لدالة الأداة — لاستخدامها داخل التأثيرات دون إعادة ربط */
+  const pickToolRef = useRef(pickTool);
+  pickToolRef.current = pickTool;
+
+  /* العجلة السينمائية: اختيار خدمة ← فلتر المنتقي ← بعد وصول الملفات تُفعّل وظيفتها الحقيقية */
+  const handleServicePick = (svc: ServicePick) => {
+    setAcceptTypes(svc.accept);
+    setPendingSvc(svc);
+    inputRef.current?.click();
+  };
+
+  useEffect(() => {
+    if (!pendingSvc || files.length === 0) return;
+    const svc = pendingSvc;
+    setPendingSvc(null);
+    setAcceptTypes(".pdf,image/*"); /* العودة للقب العام للإضافات اللاحقة */
+    if (svc.then?.cad) {
+      setTool(null);
+      setEditing(false);
+      setCadOpen(true);
+    } else if (svc.then?.editor) {
+      setTool(null);
+      setEditing(true);
+    } else if (svc.then?.tool) {
+      setEditing(false);
+      pickToolRef.current(svc.then.tool);
+    }
+  }, [pendingSvc, files.length]);
 
   const togglePage = (n: number) => {
     const next = selPages.includes(n)
@@ -653,7 +686,7 @@ export function Workbench() {
         ref={inputRef}
         type="file"
         multiple
-        accept=".pdf,image/*"
+        accept={acceptTypes}
         className="hidden"
         onChange={(e) => {
           const fs = Array.from(e.target.files ?? []);
@@ -663,32 +696,8 @@ export function Workbench() {
       />
 
       {files.length === 0 ? (
-        /* ─── لا ملفات: منطقة إفلات واحدة ─── */
-        <div
-          className={cn(
-            "mt-8 rounded-3xl border-2 border-dashed bg-white/70 py-20 text-center transition",
-            dragOver ? "border-primary bg-primary/5" : "border-primary/30"
-          )}
-          onClick={() => inputRef.current?.click()}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
-        >
-          <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/25">
-            <Plus className="size-7" aria-hidden />
-          </div>
-          <h2 className="mt-4 text-xl font-extrabold">{t("hero.drop")}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t("hero.dropHint")}</p>
-          <Button
-            className="mt-5 px-8 font-extrabold"
-            onClick={(e) => {
-              e.stopPropagation();
-              inputRef.current?.click();
-            }}
-          >
-            {t("hero.pick")}
-          </Button>
-        </div>
+        /* ─── لا ملفات: العجلة السينمائية ─── */
+        <ServiceWheel dragOver={dragOver} onPick={handleServicePick} />
       ) : (
         <>
           {/* ─── شريط الأدوات ─── */}
