@@ -1,0 +1,26 @@
+# استبعاد ما لا يدخل صورة النشر — يقلل السياق ويسرّع البناء ويمنع تسريب الأسرار
+node_modules
+.next
+.git
+.env
+.env.*
+*.log
+dev.log
+server.log
+worklog.md
+download
+skills
+agent-ctx
+docs
+.github
+.vscode
+# أصول اختبارية تطويرية فقط (ليست ضرورية للتشغيل)
+scripts/samples
+scripts/wm_tests
+scripts/dwgtest
+scripts/*.sh
+scripts/*.ts
+scripts/*.js
+scripts/*.mjs.bak
+# استثناءات: يبقى نصّيًا مطلوبًا للـpostinstall داخل الصورة
+!scripts/patch_dxf_converter.mjs
