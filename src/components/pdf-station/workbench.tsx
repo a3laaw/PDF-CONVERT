@@ -14,6 +14,7 @@ import { CadViewer } from "@/components/pdf-station/cad-viewer";
 import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { MergePagesPanel } from "@/components/pdf-station/merge-pages-panel";
 import { SignaturePanel } from "@/components/pdf-station/signature-panel";
+import { CropPanel } from "@/components/pdf-station/crop-panel";
 import { toHindiDigits } from "@/lib/arabic";
 import { useI18n, toolKey } from "@/lib/i18n";
 import { toast } from "sonner";
@@ -412,10 +413,13 @@ export function Workbench() {
     activeFile?.kind === "pdf" || activeFile?.kind === "image";
   const cadEnabled = activeFile?.kind === "cad";
 
-  /* وضع الفصل البصري بعمودين + وضع دمج الصفحات من عدة ملفات (المرحلة 3) + التوقيع */
+  /* وضع الفصل البصري بعمودين + وضع دمج الصفحات من عدة ملفات (المرحلة 3) + التوقيع + القص الحر */
   const splitMode = tool === "split" && activeFile?.kind === "pdf";
   const mergePagesMode = tool === "merge_pages";
   const signMode = tool === "sign" && activeFile?.kind === "pdf";
+  const cropMode =
+    tool === "image_crop" &&
+    (activeFile?.kind === "pdf" || activeFile?.kind === "image");
 
   const pickTool = (id: OpId) => {
     setTool(id);
@@ -507,6 +511,18 @@ export function Workbench() {
   /* نتيجة التوقيع: تُضاف للنتائج وتصير ملف العمل النشط — لتكمل التواقيع على النسخة الأخيرة */
   const signApplied = async (name: string, blob: Blob) => {
     appendResult(name, blob, "sign");
+    const newId = await addResultAsFile(name, blob);
+    setActiveId(newId);
+  };
+
+  /* نتيجة القص الحر: قطعة مستقلة تُضاف للنتائج فقط */
+  const cropPieceSaved = async (name: string, blob: Blob) => {
+    appendResult(name, blob, "crop");
+  };
+
+  /* نتيجة تنظيف: تُضاف وتصير ملف العمل النشط — تكمل التنضيف على النسخة الجديدة */
+  const cropCleaned = async (name: string, blob: Blob) => {
+    appendResult(name, blob, "crop");
     const newId = await addResultAsFile(name, blob);
     setActiveId(newId);
   };
@@ -661,6 +677,7 @@ export function Workbench() {
               return (
                 <button
                   key={id}
+                  data-testid={`tb-${id}`}
                   onClick={() => {
                     if (isEditor) {
                       if (ok) {
@@ -794,6 +811,23 @@ export function Workbench() {
                 <MergePagesPanel
                   files={files.filter((f) => f.kind === "pdf")}
                   onClose={() => setTool(null)}
+                />
+              </div>
+            ) : cropMode ? (
+              <div className="lg:col-span-2">
+                <CropPanel
+                  file={activeFile.file}
+                  fileName={activeFile.name}
+                  kind={activeFile.kind === "image" ? "image" : "pdf"}
+                  page={page}
+                  pages={activeFile.pages ?? 1}
+                  onPage={setPage}
+                  batchImages={files
+                    .filter((f) => f.kind === "image")
+                    .map((f) => ({ file: f.file, name: f.name }))}
+                  onClose={() => setTool(null)}
+                  onSavePiece={cropPieceSaved}
+                  onCleaned={cropCleaned}
                 />
               </div>
             ) : signMode ? (
@@ -958,7 +992,7 @@ export function Workbench() {
             )}
 
             {/* الجوال — شريط الصفحات الأفقي بأزرار الأفعال السريعة (الرِيل المخفي تحت 1024px) */}
-            {activeFile?.kind === "pdf" && !editing && !splitMode && !mergePagesMode && !signMode && (
+            {activeFile?.kind === "pdf" && !editing && !splitMode && !mergePagesMode && !signMode && !cropMode && (
               <div className="lg:hidden">
                 <p className="px-1 pb-1.5 text-[11px] font-bold text-muted-foreground">
                   {t("ws.pagesHint")}
@@ -1027,7 +1061,7 @@ export function Workbench() {
           </div>
 
           {/* ─── الشريط السفلي: قسم الأداة + زرّها السياقي + اسم النتيجة (يُخفى أثناء التعديل والفصل والتوقيع) ─── */}
-          {!editing && !splitMode && !mergePagesMode && !signMode && (
+          {!editing && !splitMode && !mergePagesMode && !signMode && !cropMode && (
             <>
               <div
                 ref={bottomBarRef}

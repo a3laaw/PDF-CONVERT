@@ -1,7 +1,7 @@
 /* محرك PDF «محطّة PDF» — يعمل بالكامل داخل متصفح المستخدم (خصوصية تامة)
    pdf-lib للتعديل + pdfjs للعرض والاستخراج + Canvas للنص العربي المُشكَّل */
 
-import { PDFDocument, PDFDict, PDFHexString, PDFName, PDFRawStream, PDFRef, PDFString, degrees, rgb, StandardFonts } from "pdf-lib";
+import { PDFArray, PDFDocument, PDFDict, PDFHexString, PDFName, PDFNumber, PDFObject, PDFRawStream, PDFRef, PDFString, degrees, rgb, StandardFonts } from "pdf-lib";
 import { toHindiDigits } from "./arabic";
 import { parsePageRanges } from "./interpreter";
 import { resultName, stripExt } from "./naming";
@@ -250,6 +250,193 @@ async function imageCropOne(
   } finally {
     bm.close();
   }
+}
+
+/* ─────────── القص الحر «زي الرسام» — لوحة السحب المرئي ─────────── */
+
+/** مستطيل قص بنسب طبيعية للصفحة (0..1، y0 من الأعلى) */
+export interface CropRectNorm {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * قص حر لصورة: وضع «save» يقتطع القطعة ملفًا مستقلًا (الأصل سليم)،
+ * ووضع «clean» يمسح المنطقة من الصورة نهائيًا بتبييض مطابق (تنظيف كتابة الايد والطوابع)
+ */
+export async function imageCropFree(
+  input: { file: File; name: string },
+  rect: CropRectNorm,
+  mode: "save" | "clean"
+): Promise<{ blob: Blob; ext: string; w: number; h: number }> {
+  const bm = await loadBitmap(input.file);
+  try {
+    const canvas = canvasFromBitmap(bm);
+    const isPng = /\.png$/i.test(input.name);
+    if (mode === "save") {
+      const sx = Math.max(0, Math.round(rect.x0 * canvas.width));
+      const sy = Math.max(0, Math.round(rect.y0 * canvas.height));
+      const w = Math.max(1, Math.round((rect.x1 - rect.x0) * canvas.width));
+      const h = Math.max(1, Math.round((rect.y1 - rect.y0) * canvas.height));
+      const out = document.createElement("canvas");
+      out.width = w;
+      out.height = h;
+      out.getContext("2d")!.drawImage(canvas, sx, sy, w, h, 0, 0, w, h);
+      /* القطعة دايمًا PNG — أعلى جودة وتحفظ الشفافية */
+      const { blob, ext } = await exportCanvas(out, ["image/png"]);
+      return { blob, ext, w, h };
+    }
+    /* clean — تبييض المنطقة المحددة من الصورة الأصلية */
+    const ctx = canvas.getContext("2d")!;
+    const x = Math.max(0, Math.round(rect.x0 * canvas.width));
+    const y = Math.max(0, Math.round(rect.y0 * canvas.height));
+    const w = Math.max(1, Math.round((rect.x1 - rect.x0) * canvas.width));
+    const h = Math.max(1, Math.round((rect.y1 - rect.y0) * canvas.height));
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(x, y, w, h);
+    const mimes = isPng ? ["image/png"] : ["image/jpeg", "image/png"];
+    if (!mimes.includes("image/png")) fillWhite(canvas);
+    const { blob, ext } = await exportCanvas(canvas, mimes, 0.92);
+    return { blob, ext, w: canvas.width, h: canvas.height };
+  } finally {
+    bm.close();
+  }
+}
+
+/** رسم صفحة PDF على كانفس بعرض أقصى محدد — للقص عالي الدقة وللمعاينة */
+export async function renderPageToCanvas(file: File, pageNo: number, maxW: number): Promise<{ canvas: HTMLCanvasElement; ptW: number; ptH: number }> {
+  const pdfjs = await getPdfjs();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const doc = await pdfjs.getDocument({ data: bytes }).promise;
+  const page = await doc.getPage(Math.max(1, pageNo));
+  const v1 = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: Math.min(3, maxW / v1.width) });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  const c2 = canvas.getContext("2d")!;
+  c2.fillStyle = "#ffffff";
+  c2.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvas, canvasContext: c2, viewport } as never).promise;
+  return { canvas, ptW: v1.width, ptH: v1.height };
+}
+
+/** اقتطاع قطعة من داخل صفحة PDF كصورة PNG عالية الدقة — الأصل سليم تمامًا */
+export async function pdfCropPiece(
+  file: File,
+  pageNo: number,
+  rect: CropRectNorm,
+  maxW = 1600
+): Promise<{ blob: Blob; w: number; h: number }> {
+  const { canvas } = await renderPageToCanvas(file, pageNo, maxW);
+  const sx = Math.max(0, Math.round(rect.x0 * canvas.width));
+  const sy = Math.max(0, Math.round(rect.y0 * canvas.height));
+  const w = Math.max(1, Math.round((rect.x1 - rect.x0) * canvas.width));
+  const h = Math.max(1, Math.round((rect.y1 - rect.y0) * canvas.height));
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  out.getContext("2d")!.drawImage(canvas, sx, sy, w, h, 0, 0, w, h);
+  const blob = await canvasToBlob(out, "image/png");
+  return { blob, w, h };
+}
+
+/* أنواع التعليقات القابلة للحذف الحقيقي عند التنظيف — كتابة الايد والطوابع والملاحظات
+   Widget (خانات النماذج) وLink (روابط) مستثناة عمدًا */
+const DELETABLE_ANNOTS = new Set([
+  "Ink", "FreeText", "Text", "Square", "Highlight", "Underline",
+  "StrikeOut", "Squiggly", "Stamp", "Caret", "Line", "Polygon", "PolyLine",
+]);
+
+/** حذف التعليقات الواقعة داخل منطقة من الصفحة حذفًا حقيقيًا من بنية الملف */
+function removeAnnotationsInRegion(
+  doc: PDFDocument,
+  pg: ReturnType<PDFDocument["getPage"]>,
+  region: { l: number; r: number; t: number; b: number }
+): number {
+  const node = pg.node;
+  const annotsRaw = node.get(PDFName.of("Annots"));
+  if (!annotsRaw) return 0;
+  const annots =
+    annotsRaw instanceof PDFRef
+      ? doc.context.lookup(annotsRaw, PDFArray)
+      : annotsRaw instanceof PDFArray
+        ? annotsRaw
+        : undefined;
+  if (!annots) return 0;
+  const keep: PDFObject[] = [];
+  let removed = 0;
+  for (let i = 0; i < annots.size(); i++) {
+    const el = annots.get(i);
+    const dict = doc.context.lookup(el);
+    if (!(dict instanceof PDFDict)) {
+      keep.push(el);
+      continue;
+    }
+    const subtypeObj = dict.get(PDFName.of("Subtype"));
+    const st = String(subtypeObj ?? "").replace(/^\//, "");
+    let hit = false;
+    if (DELETABLE_ANNOTS.has(st)) {
+      const rr = dict.get(PDFName.of("Rect"));
+      if (rr instanceof PDFArray && rr.size() >= 4) {
+        const nums = [0, 1, 2, 3].map((k) => {
+          const n = doc.context.lookup(rr.get(k));
+          return n instanceof PDFNumber ? n.asNumber() : NaN;
+        });
+        if (nums.every(Number.isFinite)) {
+          const l = Math.min(nums[0], nums[2]);
+          const r = Math.max(nums[0], nums[2]);
+          const b = Math.min(nums[1], nums[3]);
+          const t = Math.max(nums[1], nums[3]);
+          hit = l < region.r && r > region.l && b < region.t && t > region.b;
+        }
+      }
+    }
+    if (hit) removed++;
+    else keep.push(el);
+  }
+  if (removed > 0) node.set(PDFName.of("Annots"), doc.context.obj(keep));
+  return removed;
+}
+
+/**
+ * تنظيف صفحات PDF من منطقة مرسومة: التعليقات (كتابة الايد، طوابع، تظليل) داخل المنطقة
+ * تُحذف حذفًا حقيقيًا من جوه الملف، وأي محتوى محروق في ورقة ممسوحة يتغطى ببياض مطابق.
+ * applyAll يطبّق نفس المنطقة على كل الصفحات (طابع مكرر مثلًا)
+ */
+export async function pdfCleanRegion(
+  file: File,
+  pageNo: number,
+  rect: CropRectNorm,
+  applyAll = false
+): Promise<{ bytes: Uint8Array; removedAnnots: number }> {
+  const out = await loadPdfLib(new Uint8Array(await file.arrayBuffer()));
+  const targets = applyAll ? out.getPageIndices() : [Math.max(0, pageNo - 1)];
+  let removedAnnots = 0;
+  for (const idx of targets) {
+    const pg = out.getPage(idx);
+    const W = pg.getWidth();
+    const H = pg.getHeight();
+    const region = {
+      l: rect.x0 * W,
+      r: rect.x1 * W,
+      t: (1 - rect.y0) * H,
+      b: (1 - rect.y1) * H,
+    };
+    removedAnnots += removeAnnotationsInRegion(out, pg, region);
+    /* غطاء أبيض مطابق للورقة — يخفي المحتوى المحروق في الملفات الممسوحة */
+    pg.drawRectangle({
+      x: Math.max(0, region.l),
+      y: Math.max(0, region.b),
+      width: Math.max(0.5, Math.min(W, region.r) - Math.max(0, region.l)),
+      height: Math.max(0.5, Math.min(H, region.t) - Math.max(0, region.b)),
+      color: rgb(1, 1, 1),
+    });
+  }
+  const bytes = await out.save({ useObjectStreams: true });
+  return { bytes, removedAnnots };
 }
 
 /** تصغير حجم صورة واحدة — الصيغة تُختار بذكاء: WebP تحفظ الشفافية، JPG للعادية */
