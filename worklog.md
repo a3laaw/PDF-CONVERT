@@ -901,3 +901,22 @@ Work Log:
 Stage Summary:
 - «قص من الداخل زي الرسام» صار أداة واحدة للصور وصفحات الـPDF: سحب حر بأي مكان، عدّاد بكسل حي، نسب جاهزة بقفل سليم، وزران يفصلان القصدَين — حفظ القطعة ملفًا مستقلًا (الأصل سليم) أو مسحها نهائيًا من الصفحة، والتنظيف يشال تعليقات الكتابة والطوابع حذفًا حقيقيًا من بنية الملف ويغطي المحروق ببياض مطابق، مع تطبيق جماعي على كل الصفحات أو كل الصور، وكل نسخة نظيفة تصير ملف العمل لتكمل التنضيف.
 - الملفات: pdf-engine.ts (CropRectNorm + imageCropFree + renderPageToCanvas مصدَّرة + pdfCropPiece + DELETABLE_ANNOTS + removeAnnotationsInRegion + pdfCleanRegion) · crop-panel.tsx جديد · workbench.tsx (cropMode + CropPanel + الردان + tb-* testids) · tools-catalog.ts (ترقية image_crop) · i18n×3 (crop.* 22 مفتاحًا) · scripts/e2e_crop_free.sh وscripts/make_crop_tests.py وscripts/make_crop_annot_pdf.js جديدان · public/croptest/ (صورتا اختبار + PDF بتعليق Ink).
+
+---
+Task ID: 47
+Agent: Main Agent (Z.ai)
+Task: طلب المستخدم بعد تجربة أداة القص — «ممتاز لكن لو كمان يكون بزر دليت من لوحه المفاتيح و التراجع ايضا مع كنترول حرف Z دي حاجات ناقصه هيا مش اساسيه لكن كماليات كويسه» — اختصارات لوحة المفاتيح للقص والتنظيف.
+
+Work Log:
+- **مسح شامل أولًا**: المحرر (editor-canvas.tsx سطور 837-859) يملك الاختصارات كلها سلفًا (Ctrl+Z تراجع / Ctrl+Shift+Z وCtrl+Y إعادة / Delete وBackspace حذف المحدد / Escape إلغاء تحديد) مع سطر تلميح سفلي ed.hintShortcuts — الناقص الفعلي كان لوحة القص الجديدة (Task 46) بلا أي مستمع keydown، وهي التي جرّبها المستخدم.
+- **التراجع عبر الإصدارات (فلسفة المنتج نفسها)**: كل تنظيف يولّد نسخة جديدة والأصل يظل في القائمة — فالتراجع = إعادة تفعيل النسخة السابقة لا محاولة استرجاع بايتات. workbench.tsx: cropUndoRef/cropRedoRef أكوام أرقام ملفات، cropCleaned يدفع معرّف الملف النشط السابق للكومة ويمسح الإعادة، cropUndoFn/cropRedoFn تُبادل بين الكومتين وتعيد التفعيل بـsetActiveId (تعمل متعددة الخطوات: نضيفة → نضيفة-نضيفة → الأصل).
+- **crop-panel.tsx — مستمع keydown على النافذة** (نمط «أحدث مرجع» cleanRef/undoRef/redoRef كي لا يُعاد ربط المستمع مع كل رندر): Delete/Backspace مع تحديد وبلا انشغال = preventDefault + cleanRegion (نفس مسار الزر الأحمر حرفيًا)؛ Ctrl+Z يعيد true من onUndo → توست «تم التراجع»، وإلا فَيلغي التحديد (سلوك الرسام: لا تاريخ = مسح marquee)؛ Ctrl+Shift+Z وCtrl+Y للإعادة بتوست «تمت الإعادة»؛ Escape يلغي التحديد. حارس INPUT/TEXTAREA/isContentEditable يمنع سرقة المفاتيح من حقول الكتابة، وbusy يمنع الحذف المزدوج.
+- **الواجهة**: سطر تلميح crop.kbd بخلفية رمادية data-testid=crop-kbd تحت زرّي التنفيذ (Delete يحذف المنطقة نهائيًا · Ctrl+Z تراجع · Ctrl+Y إعادة · Esc إلغاء التحديد) + title على زر التنظيف يذكر Delete — الاختصارات صارت مكشوفة لا مخفية. i18n×3: crop.kbd/crop.undone/crop.redone.
+- **E2E scripts/e2e_crop_kbd.sh — 32/32 ✓ من أول تشغيل (لقطات crop_kbd_01–04)**: سطر الاختبارات ظاهر، Delete ينضّف (نشط = نضيفة.png)، Ctrl+Z يعيد الأصلي + توست، Ctrl+Y يعيد النضيفة + توست، Esc يلغي التحديد، Backspace ينضّف ثانية (نضيفة-نضيفة)، Ctrl+Z متعدد الخطوات يرجع لنضيفة، وانحدار المحرر الكامل: رسم قلم → زر التراجع ينتقل من معطّل لفعّال → Ctrl+Z يفرّغ → Ctrl+Y يسترجع → تحديد العنصر بأداة التحريك → Delete يحذفه — والكونسول نظيف عبر الجلسة.
+- **انحدار القص الكامل**: e2e_crop_free.sh **25/25 ✓** — المستمع الجديد لم يمسّ أي سلوك ماوس قائم.
+- tsc: صفر أخطاء src/ · eslint: نظيف · فحص أمني: لا أسرار · dev.log بلا أخطاء.
+- **ملاحظة نشر**: الرمز غير مخزّن في هذه البيئة (يُمرَّر تفاعليًا كل جلسة) — الالتزام محفوظ محليًا eff9e7b ويحتاج export GH=<token> ثم push.
+
+Stage Summary:
+- لوحة «قص وتنظيف» صارت تُدار كاملة من لوحة المفاتيح زي الرسام: حدّد بالسحب ثم Delete (أو Backspace) يمسح المنطقة نهائيًا، Ctrl+Z يرجع بالإصدار السابق فورًا مهما تعددت التنظيفات، Ctrl+Y يعيدها، Esc يلغي التحديد — والتراجع مستمد من فلسفة الإصدارات القائمة (الأصل محفوظ دائمًا في القائمة) فلا خسارة ممكنة، والمحرر القديم كان يملك الاختصارات ويظل كما هو مع انحدار مثبت.
+- الملفات: workbench.tsx (cropUndoRef/cropRedoRef + cropUndoFn/cropRedoFn + تمرير onUndo/onRedo) · crop-panel.tsx (خصائص onUndo/onRedo + مستمع keydown بنمط أحدث مرجع + سطر crop-kbd + title الزر) · i18n×3 (3 مفاتيح) · scripts/e2e_crop_kbd.sh جديد؛ لقطات crop_kbd_01–04.
