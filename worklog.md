@@ -663,3 +663,25 @@ Work Log:
 Stage Summary:
 - عارض الأوتوكاد صار فيه أداة قياس احترافية: نقطتان أو سلسلة، أبعاد ملتصقة بإحداثيات العالم مهما كبرت/صغرت، زوايا وفروق وإجمالي، عامل تحويل للوحدة الحقيقية، قرصة وعجلة يشتغلان أثناء القياس، وثلاث لغات — 26 قدرة تفاعلية الآن بدل 25 أداة.
 - الملفات الملموسة: cad-viewer.tsx (+290)، i18n/ar|en|hi.ts (+12 مفتاح لكل)، scripts/e2e_measure.sh (جديد)، لقطات 67–73.
+---
+Task ID: 36
+Agent: Main Agent (Z.ai)
+Task: التحسين ⑫ من قائمة الأفكار — طلب المستخدم «Pwa»: تطبيق ويب تقدمي قابل للتثبيت ويعمل بدون إنترنت.
+
+Work Log:
+- **أيقونات PWA (scripts/gen_pwa_icons.mjs بـ sharp)**: تصميم SVG بهوية الموقع (تدرج بنفسجي + مستند بزاوية مطوية + سهمان متقابلان + شارة PDF) → 5 ملفات: icon-192/512 + maskable-512 (خلفية كاملة والمحتوى داخل دائرة الأمان 0.72) + apple-touch-icon 180 + favicon-32 في public/icons/.
+- **manifest.webmanifest**: name/short_name عربية، dir=rtl، lang=ar، standalone، theme #4F55E3، start_url /?source=pwa، 3 أيقونات (any+maskable)، و3 اختصارات أدوات حقيقية: دمج (?op=merge) وتصغير (?op=compress) وتوقيع (?op=sign).
+- **public/sw.js (عامل خدمة يدوي بلا مكتبات)**: precache للشل → تنقلات شبكة-أولاً برجوع للذاكرة، /workers/ (wasm 10MB) ذاكرة-أولاً، الأيقونات/الخطوط ذاكرة-أولاً، **/_next/static شبكة-أولاً بذاكرة رجوع** (روابط Turbopack ثابتة في التطوير — درس مستخرج أدناه)، البقية stale-while-revalidate، وتجاهل تام لـ/api/ وHMR (webpack-hmr/hot-update) وأي غير-GET. skipWaiting + clients.claim + تنظيف ذاكرات الإصدارات.
+- **src/components/pdf-station/pwa.tsx**: PwaProvider (تسجيل SW بupdateViaCache:none + فحص تحديث كل 30ث، التقاط beforeinstallprompt، event appinstalled مع toast) + هوك usePwaInstall → زر «ثبّت التطبيق» في الهيدر (يظهر فقط عند سماح المتصفح) + شارة «بدون اتصال — كل الأدوات تشتغل عادي داخل متصفحك» ثابتة أسفل الوسط.
+- **الدمج**: layout.tsx (manifest + icons + appleWebApp + applicationName + PwaProvider يلف المحتوى)، header-bar (زر التثبيت قبل مبدّل اللغة)، workbench (مفتاح ?op= يفتح الأداة مباشرة عند الإقلاع)، i18n: pwa.install/installed/offline في القواميس الثلاثة.
+- **E2E (scripts/e2e_pwa.sh + e2e_pwa2.sh، لقطات 74–80)**: manifest والأيقونات الخمس كلها 200 ✓، apple-touch-icon مُعلن ✓، العامل نشط ومسيطر بالصفحة ✓ (getRegistration + getController)، ذاكرات pdfc-v2-shell|assets فيها الرئيسية 200 والأيقونات ✓، **إعادة تحميل أوفلاين كاملة: التطبيق يرسم ويتماهى (زر التثبيت والشارة حالة عميل) ✓**، اختصار ?op=merge أوفلاين يفتح التطبيق ✓ وأونلاين بحقن t_split5.pdf فعّل زر الدمج (bg-primary/10) ✓، جوال 390 بلا فيض ✓، إنجليزي سليم ✓، و28+ فحصًا.
+- **خطآن حقيقيان اكتُشفا وأُصلحا**:
+  1. **شارة أوفلاين زائفة من SSR**: Node 21+ يملك navigator عالميًا لكن بلا onLine → `!undefined = true` → الخادم رسم الشارة في HTML الأولي وتركها يتيمة بلا fiber بعد الهيدراشن (تأكدت: Node navigator موجود بلا onLine، والعنصر المحذوف لا يعود لأنه ليس من شجرة React الحية). الحل: init يعتمد window ووجود "onLine" في navigator — الـHTML أصبح نظيفًا 0 تكرار.
+  2. **ذاكرة chunks قديمة في التطوير**: cache-first لـ/_next/static كان يقدم كودًا قديمًا بعد كل تعديل (روابط Turbopack ثابتة بلا تجزئة) — فإصلاحي الأول لم يصل الصفحة أصلًا وبدت «الشارة عالقة». الحل: شبكة-أولاً بذاكرة رجوع لـchunks التطبيق + رفع الإصدار إلى pdfc-v2 (في الإنتاج التجزئة تحمي أصلًا).
+  3. إضافة: أحداث online/offline قد تفوت → مزامنة ذكية (focus + visibilitychange + نبضة كل 4ث) — setState بنفس القيمة لا يعيد الرسم.
+- tsc: صفر أخطاء src/ · eslint: نظيف (أصلحت set-state-in-effect بتهيئة كسولة) · فحص أمني: لا أسرار · dev.log: لا أخطاء.
+
+Stage Summary:
+- «محوّل PDF» صار PWA كاملًا: يُثبَّت من المتصفح (زر يظهر تلقائيًا عند التوفر)، يعمل بدون إنترنت كشل+chunks+عمال wasm مخبأة، شارة صادقة لعدم الاتصال تظهر وتختفي ذاتيًا، اختصارات أدوات من أيقونة النظام تفتح الأداة مباشرة، وثلاث لغات.
+- درسان محفوظان: navigator في Node 21+ موجود بلا onLine (خطر SSR للشارات)، وذاكرة cache-first على روابط Turbopack الثابتة تُجمّد الكود في التطوير.
+- الملفات: pwa.tsx وsw.js وmanifest.webmanifest وpublic/icons/×5 وgen_pwa_icons.mjs وe2e_pwa(.2).sh + تعديلات layout/header-bar/workbench/i18n.

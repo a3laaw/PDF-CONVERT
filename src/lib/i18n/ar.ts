@@ -324,4 +324,9 @@ export const ar: Record<string, string> = {
   "hero.statLangs": "لغات مفهومة",
   "hero.statBytes": "بايت يغادر جهازك",
   "hero.cta": "اركب المحطة الآن",
+
+  /* PWA — التثبيت والعمل بدون إنترنت */
+  "pwa.install": "ثبّت التطبيق",
+  "pwa.installed": "تم تثبيت «محوّل PDF» — صار على شاشتك الرئيسية",
+  "pwa.offline": "بدون اتصال — كل الأدوات تشتغل عادي داخل متصفحك",
 };

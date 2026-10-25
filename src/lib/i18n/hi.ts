@@ -312,4 +312,9 @@ export const hi: Record<string, string> = {
   "hero.statLangs": "भाषाएँ सपोर्टेड",
   "hero.statBytes": "बाइट डिवाइस से गए",
   "hero.cta": "अभी शुरू करें",
+
+  /* PWA — इंस्टॉल और ऑफ़लाइन */
+  "pwa.install": "ऐप इंस्टॉल करें",
+  "pwa.installed": "PDF कन्वर्टर इंस्टॉल हो गया — होम स्क्रीन पर मौजूद है",
+  "pwa.offline": "ऑफ़लाइन — सारे टूल्स ब्राउज़र में आराम से चलते हैं",
 };

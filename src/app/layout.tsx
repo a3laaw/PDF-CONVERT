@@ -4,6 +4,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { I18nProvider } from "@/lib/i18n";
 import { HindiFont, hindiFont } from "@/components/pdf-station/hindi-font";
+import { PwaProvider } from "@/components/pdf-station/pwa";
 
 const tajawal = Tajawal({
   variable: "--font-tajawal",
@@ -28,6 +29,22 @@ export const metadata: Metadata = {
     "تعديل PDF",
   ],
   authors: [{ name: "محوّل PDF" }],
+  manifest: "/manifest.webmanifest",
+  applicationName: "محوّل PDF",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "محوّل PDF",
+  },
+  formatDetection: { telephone: false },
+  icons: {
+    icon: [
+      { url: "/icons/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
   openGraph: {
     title: "محوّل PDF",
     description:
@@ -52,9 +69,11 @@ export default function RootLayout({
         className={`${tajawal.variable} ${hindiFont.variable} antialiased bg-background text-foreground`}
       >
         <I18nProvider>
-          <HindiFont />
-          {children}
-          <Toaster position="bottom-right" dir="rtl" richColors closeButton />
+          <PwaProvider>
+            <HindiFont />
+            {children}
+            <Toaster position="bottom-right" dir="rtl" richColors closeButton />
+          </PwaProvider>
         </I18nProvider>
       </body>
     </html>

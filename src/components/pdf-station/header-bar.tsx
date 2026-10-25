@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeftRight, Globe } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { LOCALES, LOCALE_META } from "@/lib/i18n/core";
+import { PwaInstallButton } from "@/components/pdf-station/pwa";
 
 /** شريط الأعلى: الاسم + وصف مختصر + مبدّل اللغة — مساحة عمل واحدة */
 export function HeaderBar() {
@@ -33,6 +34,8 @@ export function HeaderBar() {
           {t("site.tagline")}
         </span>
         <span className="flex-1 sm:hidden" aria-hidden />
+        {/* زر تثبيت التطبيق — يظهر حين يسمح المتصفح */}
+        <PwaInstallButton />
         {/* مبدّل اللغة */}
         <div ref={wrapRef} className="relative" data-testid="lang-switcher">
           <button

@@ -348,6 +348,12 @@ export function Workbench() {
       .catch(() => thumbsReq.current.delete(activeFile.id));
   }, [activeFile, thumbs]);
 
+  /* اختصارات PWA (?op=merge مثلاً) تفتح الأداة مباشرة عند الإقلاع */
+  useEffect(() => {
+    const op = new URLSearchParams(window.location.search).get("op");
+    if (op && TOOLS_BY_ID[op as OpId]) setTool(op as OpId);
+  }, []);
+
   /* المعاينة الكبيرة للصفحة النشطة — مفتوحة بالمفتاح لتفادي setState المتزامن */
   const previewKey = activeFile ? `${activeFile.id}:${activeFile.kind === "image" ? "img" : page}` : "";
   const [previewState, setPreviewState] = useState<{ key: string; url: string } | null>(null);

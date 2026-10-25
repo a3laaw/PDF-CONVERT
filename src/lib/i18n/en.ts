@@ -312,4 +312,9 @@ export const en: Record<string, string> = {
   "hero.statLangs": "languages supported",
   "hero.statBytes": "bytes leave your device",
   "hero.cta": "Start now",
+
+  /* PWA — install & offline */
+  "pwa.install": "Install app",
+  "pwa.installed": "PDF Converter installed — it's on your home screen",
+  "pwa.offline": "Offline — all tools still work inside your browser",
 };
