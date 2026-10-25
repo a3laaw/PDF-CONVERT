@@ -70,6 +70,31 @@ function pinchOf(m: Map<number, Pt>) {
   };
 }
 
+/* ── فحص جهوزية العمال: ثلاث طبقات تحتمل البوابات الصارمة ──
+   بعض بوابات المعاينة تمنع HEAD أو ترد عليه بغير 200 — والصفحة نفسها حُمّلت بـGET
+   فنجرب: HEAD ← GET بنطاق بايتات ← GET كامل. نفشل فقط إن فشلت الثلاثة كلها */
+const probeWorkerUrl = async (url: string): Promise<boolean> => {
+  try {
+    const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+    if (r.ok) return true;
+  } catch {
+    /* البوابة رفضت HEAD — نكمل */
+  }
+  try {
+    const r = await fetch(url, { headers: { Range: "bytes=0-0" }, cache: "no-store" });
+    if (r.ok || r.status === 206) return true;
+  } catch {
+    /* نكمل للطبقة الثالثة */
+  }
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (r.ok) return true;
+  } catch {
+    /* لا شيء نجح */
+  }
+  return false;
+};
+
 /* مفاتيح أزرار الشريط — الترجمة عبر القاموس */
 const TOOLBAR_ACTIONS = {
   zoomIn: "cad.zoomIn",
@@ -199,11 +224,12 @@ export function CadViewer({ fileName, file, onClose }: Props) {
             parserWorkerUrl: "/workers/dxf-parser-worker.js",
           })
         );
-        const ready = await simple.AcApDocManager.checkWebworkerReadiness(
-          workerUrls
-        );
+        const workersOk = await Promise.all([
+          probeWorkerUrl(workerUrls.mtextRender),
+          probeWorkerUrl(workerUrls.dwgParser),
+        ]);
         if (!alive) return;
-        if (!ready)
+        if (!workersOk.every(Boolean))
           throw new Error("k:cad.workersFail");
         const box = boxRef.current;
         if (!box) return;
@@ -219,12 +245,32 @@ export function CadViewer({ fileName, file, onClose }: Props) {
         setStatus(isDwg ? "k:cad.readingDwg" : "k:cad.readingDxf");
         const buf = await file.arrayBuffer();
         const { AcEdOpenMode } = await import("@mlightcad/cad-simple-viewer");
-        const ok = await manager.openDocument(file.name, buf, {
-          mode: AcEdOpenMode.Read,
-        });
+        let ok: boolean;
+        try {
+          ok = await manager.openDocument(file.name, buf, {
+            mode: AcEdOpenMode.Read,
+          });
+        } catch (openErr) {
+          /* أخطاء المحرك تصل إنجليزية خام — نصنفها ونعطي رسالة عربية مفيدة.
+           * worker_oom = انهيار wasm أثناء تحليل DWG معقد (خلل معروف في LibreDWG) */
+          if (!alive) return;
+          const msg = String(
+            openErr instanceof Error ? openErr.message : openErr
+          );
+          const code =
+            typeof openErr === "object" && openErr && "code" in openErr
+              ? String((openErr as { code?: unknown }).code)
+              : "";
+          if (
+            code === "worker_oom" ||
+            /out of memory|memory access|oom/i.test(msg)
+          )
+            throw new Error("k:cad.openFailDwg");
+          throw new Error("k:cad.openFail");
+        }
         if (!alive) return;
         if (!ok)
-          throw new Error("k:cad.openFail");
+          throw new Error(isDwg ? "k:cad.openFailDwg" : "k:cad.openFail");
         /* الطبقات: قائمة حية تتحدث مع أي تغيير */
         const doc = manager.curDocument;
         const refresh = () => {

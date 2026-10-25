@@ -251,6 +251,7 @@ export const hi: Record<string, string> = {
   "cad.workersFail": "हेल्पर फाइलें नहीं मिल रहीं — पेज रीलोड करें",
   "cad.engineFail": "रेंडरिंग इंजन शुरू नहीं हुआ",
   "cad.openFail": "फाइल नहीं खुली — खराब हो सकती है या AutoCAD का पुराना वर्शन है",
+  "cad.openFailDwg": "यह DWG पढ़ नहीं पाए — संरचना जटिल है या ऐसे ऑब्जेक्ट हैं जो हमारा इंजन अभी सपोर्ट नहीं करता। पक्का उपाय: AutoCAD में खोलकर Save As से DXF बनाएँ और वह अपलोड करें — DXF कहीं बेहतर खुलता है",
   "cad.openFailTitle": "फाइल नहीं खोल सके",
   "cad.unexpected": "अनजानी दिक्कत आ गई",
   "cad.wheelHint": "माउस व्हील = ज़ूम · खींचें = हिलाएँ",

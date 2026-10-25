@@ -251,6 +251,7 @@ export const en: Record<string, string> = {
   "cad.workersFail": "Helper files aren't reachable — reload the page",
   "cad.engineFail": "Couldn't start the rendering engine",
   "cad.openFail": "Couldn't open the file — it may be damaged or from an unsupported AutoCAD version",
+  "cad.openFailDwg": "We couldn't read this DWG — its structure is complex or uses objects our engine doesn't support yet. Reliable fix: open it in AutoCAD, Save As DXF, and upload that here — DXF opens far more reliably",
   "cad.openFailTitle": "We couldn't open the file",
   "cad.unexpected": "Something unexpected went wrong",
   "cad.wheelHint": "Mouse wheel = zoom · drag = pan",

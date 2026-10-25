@@ -6,7 +6,7 @@
  *  - البقية same-origin GET: stale-while-revalidate
  *  - ما لا نلمسه أبدًا: /api/ وHMR (webpack-hmr/hot-update) وأي طلب غير GET — حتى لا نكسر التطوير
  */
-const VERSION = "pdfc-v2";
+const VERSION = "pdfc-v3";
 const SHELL = `${VERSION}-shell`;
 const ASSETS = `${VERSION}-assets`;
 const BIG = `${VERSION}-big`;
