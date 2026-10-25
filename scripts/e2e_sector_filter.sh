@@ -4,9 +4,9 @@
 #  (2) شارة القسم تظهر باسم «صور» ولون القسم
 #  (3) شريط الأدوات = 6 أدوات صور فقط — دمج/ختم/فصل/أوفيس مختفية تمامًا
 #  (4) إفلات/إضافة PDF داخل قسم الصور ← توست رفض + عدد الملفات لا يتغير
-#  (5) زر «كل الأدوات» ← الشارة تختفي والشريط يعود كاملًا والقبول يعم
-#  (6) قسم PDF ← 18 أداة PDF فقط (بلا image_convert وبلا pdf_to_word) + إضافة صورة تترفض
-#  (7) الزر العام «اختر ملفاتك» ← بلا شارة وكل الأدوات الـ25 (السلوك القديم سليم)
+#  (5) زر «كل الأدوات» ← الشارة تختفي والشريط يعود كاملًا (27 = 26 داخل القوائم + CAD المستقل) والقبول يعم
+#  (6) قسم PDF ← 18 أداة PDF فقط داخل القوائم (بلا image_convert وبلا pdf_to_word) + إضافة صورة تترفض
+#  (7) الزر العام «اختر ملفاتك» ← بلا شارة وكل الأدوات الـ27 (السلوك القديم سليم)
 #  (8) الجوال 390px: بطاقة صور ← الشارة والـ 6 أدوات
 #  (9) الكونسول: خطأ hydration الأساس المعروف فقط — لا أخطاء جديدة
 # دروس مثبتة: mahatta-locale=ar · النقر عبر eval .click() · الحقن عبر input[type=file]+DataTransfer
@@ -56,12 +56,14 @@ files_count() {
 seg_accept() {
   EV "(() => document.querySelector('input[type=file]')?.getAttribute('accept') ?? 'NO-INPUT')()"
 }
-# أدوات الشريط الظاهرة — أسماء testid مفصولة بمسافات
-tb_list() {
-  EV "(() => Array.from(document.querySelectorAll('[data-testid^=tb-]')).map(b => b.dataset.testid).join(' '))()"
+# أدوات الشريط المنسدل (المحور 3) — تُجمع بفتح كل قائمة بدورها: الأدوات في الـ DOM داخل قوائمها فقط
+# + عارض CAD المستقل الذي يظل في الشريط دائمًا
+menu_tools() {
+  EV "(async () => { const out = new Set(); for (const g of Array.from(document.querySelectorAll('[data-testid^=mb-g-]'))) { g.click(); await new Promise(r => setTimeout(r, 170)); document.querySelectorAll('[data-testid^=tb-]').forEach(b => out.add(b.dataset.testid)); g.click(); await new Promise(r => setTimeout(r, 90)); } return Array.from(out).sort().join(' '); })()"
 }
+tb_list() { menu_tools; }
 tb_count() {
-  EV "(() => document.querySelectorAll('[data-testid^=tb-]').length)()"
+  EV "(async () => { const out = new Set(); for (const g of Array.from(document.querySelectorAll('[data-testid^=mb-g-]'))) { g.click(); await new Promise(r => setTimeout(r, 170)); document.querySelectorAll('[data-testid^=tb-]').forEach(b => out.add(b.dataset.testid)); g.click(); await new Promise(r => setTimeout(r, 90)); } return String(out.size); })()"
 }
 chip_state() {
   EV "(() => { const c = document.querySelector('[data-testid=sector-chip]'); return c ? 'OK chip: ' + c.textContent.slice(0, 40) : 'NO-CHIP'; })()"
@@ -129,7 +131,7 @@ ck "$(EV "(() => { const b = document.querySelector('[data-testid=sector-exit]')
 sleep 1
 ck "$(EV "(() => document.querySelector('[data-testid=sector-chip]') ? 'BAD chip-still' : 'OK chip gone')()")"
 N=$(tb_count)
-if [ "$N" = "25" ]; then ck "OK all 25 tools back"; else ck "FAIL toolbar=$N"; fi
+if [ "$N" = "27" ]; then ck "OK all 27 tools back (26 menus + cad)"; else ck "FAIL toolbar=$N"; fi
 ACC3=$(seg_accept)
 if [ "$ACC3" = ".pdf,image/*" ]; then ck "OK accept general again ($ACC3)"; else ck "FAIL accept=$ACC3"; fi
 
@@ -146,8 +148,13 @@ if [ "$N" = "18" ]; then ck "OK toolbar=18 pdf tools"; else ck "FAIL toolbar=$N 
 LIST=$(tb_list)
 case "$LIST" in
   *tb-image_convert*|*tb-image_resize*|*tb-images_to_pdf*|*tb-pdf_to_word*|*tb-pdf_to_excel*) ck "FAIL image/office tools in pdf sector: $LIST" ;;
-  *tb-editor*tb-merge*tb-split*tb-sign*tb-protect*) ck "OK pdf toolset correct" ;;
-  *) ck "FAIL unexpected list: $LIST" ;;
+  *)
+    OKP=1
+    for T in tb-editor tb-merge tb-split tb-sign tb-protect tb-compress tb-rotate; do
+      echo "$LIST" | rg -q "(^| )$T( |$)" || OKP=0
+    done
+    if [ "$OKP" = "1" ]; then ck "OK pdf toolset correct"; else ck "FAIL missing pdf tools: $LIST"; fi
+    ;;
 esac
 ck "$(inject crop_clean_me.png image/png)"
 sleep 1.5
@@ -164,7 +171,7 @@ ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
 ck "$(EV "(() => document.querySelector('[data-testid=sector-chip]') ? 'BAD chip-on-generic' : 'OK no chip (generic mode)')()")"
 N=$(tb_count)
-if [ "$N" = "25" ]; then ck "OK generic keeps all 25 tools"; else ck "FAIL toolbar=$N"; fi
+if [ "$N" = "27" ]; then ck "OK generic keeps all 27 tools"; else ck "FAIL toolbar=$N"; fi
 $B screenshot $S/sector_03_generic.png >/dev/null 2>&1
 
 echo "═══ 6) قسم أوتوكاد: أداة واحدة فقط ═══"

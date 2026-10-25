@@ -26,6 +26,12 @@ export const en: Record<string, string> = {
   "grp.info": "Info",
   "grid.title": "All tools — free, right in your browser",
   "grid.sub": "Organize · Optimize · Convert · Edit · Protect · Info — pick a tool and start instantly",
+  "mb.aria": "Categorized toolbar",
+  "ws.chooseTool": "Pick a tool from the toolbar above to start — nothing opens automatically",
+  "hub.aria": "All tools — click to show or hide",
+  "hub.title": "All tools",
+  "tools.editor.name": "Editor",
+  "tools.editor.desc": "Edit text on pages and images right on the file — add, remove, and format",
   /* Back-to-wheel button + clean session */
   "home.back": "Back to wheel",
   "home.generic": "General mode — all tools",

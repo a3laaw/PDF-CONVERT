@@ -3,14 +3,14 @@
 /* شاشة العمل الجديدة — عرض الملف + شريط أدوات واحد، بدون أوامر نصية ولا شرح */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, FileOutput, Home, LayoutGrid, Pencil, RotateCw, Trash2, X } from "lucide-react";
+import { Check, Copy, FileOutput, Home, LayoutGrid, MousePointerClick, Pencil, RotateCw, Trash2, X } from "lucide-react";
 import { useWorkspace } from "@/store/workspace";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
 import { downloadBlob, openBlobInNewTab, pageQuickAction, pdfPageThumbs, readPdfMetadata } from "@/lib/pdf-engine";
-import { TOOL_ICONS } from "@/components/pdf-station/tool-icons";
 import { ToolsGrid } from "@/components/pdf-station/tools-grid";
 import { CompareStage, COMPARE_TOOLS } from "@/components/pdf-station/compare-stage";
+import { ToolMenuBar } from "@/components/pdf-station/tool-menu-bar";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,6 +34,7 @@ import {
   SVC_COLOR,
   SVC_ICON,
   type ServicePick,
+  type SectorTool,
 } from "@/components/pdf-station/service-wheel";
 import { toHindiDigits } from "@/lib/arabic";
 import { useI18n, toolKey } from "@/lib/i18n";
@@ -42,34 +43,6 @@ import type { FileKind, OpId, ResultFile } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-
-const TOOLBAR: { id: OpId | "editor" | "cad_viewer"; label: string }[] = [
-  { id: "editor", label: "تعديل" },
-  { id: "cad_viewer", label: "عارض أوتوكاد" },
-  { id: "compress", label: "تصغير" },
-  { id: "merge", label: "دمج" },
-  { id: "merge_pages", label: "دمج صفحات" },
-  { id: "split", label: "فصل" },
-  { id: "extract", label: "استخراج" },
-  { id: "delete", label: "حذف" },
-  { id: "rotate", label: "تدوير" },
-  { id: "reorder", label: "ترتيب" },
-  { id: "page_numbers", label: "ترقيم" },
-  { id: "watermark", label: "ختم" },
-  { id: "remove_watermark", label: "بدون علامة" },
-  { id: "sign", label: "توقيع" },
-  { id: "protect", label: "قفل" },
-  { id: "unlock", label: "فتح قفل" },
-  { id: "pdf_to_images", label: "لصور" },
-  { id: "images_to_pdf", label: "من صور" },
-  { id: "image_convert", label: "صيغة" },
-  { id: "image_resize", label: "أبعاد" },
-  { id: "image_crop", label: "قص" },
-  { id: "extract_text", label: "نص" },
-  { id: "ocr", label: "OCR" },
-  { id: "pdf_to_word", label: "لـ Word" },
-  { id: "pdf_to_excel", label: "لـ Excel" },
-];
 
 /* المرحلة 2 — الأدوات السياقية: لكل قسم زرّه الخاص بفعله العربي، لا يظهر إلا داخل قسمه */
 const TOOL_ACTION: Partial<Record<OpId, { verb: string }>> = {
@@ -267,8 +240,6 @@ export function Workbench() {
      بلا قسم (دخول مباشر / ?op= / الزر العام) = الوضع العام: كل الأدوات كما كان */
   const [sector, setSector] = useState<ServicePick | null>(null);
   const [pendingSvc, setPendingSvc] = useState<ServicePick | null>(null);
-  /* شبكة الأدوات المصنفة: أداة اختير من الشبكة بلا ملفات — تُنشّط فور وصول أول ملف */
-  const [pendingTool, setPendingTool] = useState<OpId | "editor" | null>(null);
   /* زر «الرجوع للعجلة»: جلسة نظيفة بتأكيد — يمسح كل الملفات والنتائج */
   const [confirmClean, setConfirmClean] = useState(false);
   const acceptTypes = sector ? sector.accept : ".pdf,image/*";
@@ -398,11 +369,7 @@ export function Workbench() {
     }
   };
 
-  /* أحدث مرجع لدالة الأداة — لاستخدامها داخل التأثيرات دون إعادة ربط */
-  const pickToolRef = useRef(pickTool);
-  pickToolRef.current = pickTool;
-
-  /* العجلة السينمائية: اختيار قسم ← القبول والأدوات تتبع القسم فورًا ← بعد وصول الملفات تُفعّل وظيفتها الحقيقية */
+  /* العجلة السينمائية: اختيار قسم ← القبول والأدوات تتبع القسم فورًا — بلا قفز تلقائي لأي أداة (المحور 2) */
   const handleServicePick = (svc: ServicePick) => {
     setSector(svc);
     setPendingSvc(svc);
@@ -423,6 +390,21 @@ export function Workbench() {
     }
   };
 
+  /* ─── المحور 1: فلترة المنتقي حسب نوع الأداة — كارت PDF يعرض .pdf فقط وصور للصور ─── */
+  const acceptForId = (id: OpId | "editor"): string => {
+    if (id === "editor") return ".pdf,image/*";
+    const a = TOOLS_BY_ID[id]?.accepts;
+    if (!a) return ".pdf,image/*";
+    if (a.includes("pdf") && a.includes("image")) return ".pdf,image/*";
+    return a.includes("pdf") ? ".pdf" : "image/*";
+  };
+  const openKindPicker = (id: OpId | "editor") => {
+    if (inputRef.current) {
+      inputRef.current.accept = acceptForId(id);
+      inputRef.current.click();
+    }
+  };
+
   /* ─── زر «الرجوع للعجلة» — جلسة نظيفة بتأكيد (قرار المستخدم) ─── */
   const cleanSession = () => {
     for (const f of files) removeFile(f.id);
@@ -439,13 +421,12 @@ export function Workbench() {
   };
 
   /* ─── شبكة «كل الأدوات»: مدخل «أداة أولًا» نمط iLovePDF ───
-     بلا ملفات: منتقي عام + تنشيط تلقائي عند الوصول
-     مع ملفات: قفزة فورية للأداة داخل مساحة العمل */
+     بلا ملفات: منتقي مفلتر بنوع الأداة — بلا تنشيط تلقائي (المحور 2)
+     مع ملفات: فتح صريح فوري داخل مساحة العمل */
   const handleGridPick = (id: OpId | "editor") => {
     if (files.length === 0) {
       setSector(null);
-      setPendingTool(id);
-      openGenericPicker();
+      openKindPicker(id);
       return;
     }
     setSector(null);
@@ -459,6 +440,16 @@ export function Workbench() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  /* ─── أيقونات مركز الترس (المحور 4): نفس سلوك الكروت تمامًا ─── */
+  const handleHubPick = (id: OpId | "editor") => {
+    if (files.length === 0) {
+      setSector(null);
+      openKindPicker(id);
+      return;
+    }
+    handleGridPick(id);
+  };
+
   /* رجوعنا للعجلة (لا ملفات)؟ القسم يُصفّر — الإدخال التالي يبدأ محايدًا */
   useEffect(() => {
     if (files.length === 0) setSector(null);
@@ -468,33 +459,14 @@ export function Workbench() {
     if (!pendingSvc || files.length === 0) return;
     const svc = pendingSvc;
     setPendingSvc(null);
-    /* القسم يظل شغالًا — فلتر المنتقي والأدوات يبقى حتى يخرج المستخدم أو يفرّغ المساحة */
+    /* القسم يظل شغالًا — فلتر المنتقي والأدوات يبقى حتى يخرج المستخدم أو يفرّغ المساحة
+       الاستثناء الوحيد: غرفة أوتوكاد — العارض هو وظيفة الغرفة ذاتها */
     if (svc.then?.cad) {
       setTool(null);
       setEditing(false);
       setCadOpen(true);
-    } else if (svc.then?.editor) {
-      setTool(null);
-      setEditing(true);
-    } else if (svc.then?.tool) {
-      setEditing(false);
-      pickToolRef.current(svc.then.tool);
     }
   }, [pendingSvc, files.length]);
-
-  /* أداة مختارة من الشبكة المصنفة بلا ملفات — تُنشّط عند وصول أول ملف */
-  useEffect(() => {
-    if (!pendingTool || files.length === 0) return;
-    const id = pendingTool;
-    setPendingTool(null);
-    if (id === "editor") {
-      setTool(null);
-      setEditing(true);
-    } else {
-      setEditing(false);
-      pickToolRef.current(id);
-    }
-  }, [pendingTool, files.length]);
 
   /* بوابة الملفات الموحدة: بلا قسم = كل شيء — مع قسم = أنواع القسم فقط والمرفوض يترفض بتوست */
   const ingestFiles = (fs: File[]) => {
@@ -574,6 +546,32 @@ export function Workbench() {
     else if (activeFile && activeFile.kind !== "pdf")
       toast.info(t("msg.kinds"));
     else toast.info(t("msg.selectPdf"));
+  };
+
+  /* ─── تفعيل موحّد لأدوات الشريط المنسدل وأيقونات العجلة — نفس منطق الأزرار القديمة ─── */
+  const activateTool = (id: SectorTool) => {
+    if (id === "editor") {
+      if (editorEnabled) {
+        setTool(null);
+        setEditing(true);
+      } else toast.info(t("msg.selectPdfOrImage"));
+      return;
+    }
+    if (id === "cad_viewer") {
+      if (cadEnabled) {
+        setTool(null);
+        setEditing(false);
+        setCadOpen(true);
+      } else toast.info(t("cad.addFirst"));
+      return;
+    }
+    if (toolEnabled(id)) {
+      setEditing(false);
+      /* النقر على «فصل» أو «دمج صفحات» أو «توقيع» وهي مفتوحة يغلقها */
+      if ((id === "split" || id === "merge_pages" || id === "sign") && tool === id)
+        setTool(null);
+      else pickTool(id);
+    } else hintDisabled(id);
   };
 
   const editorSave = (name: string, blob: Blob) => {
@@ -737,7 +735,12 @@ export function Workbench() {
       {files.length === 0 ? (
         /* ─── لا ملفات: العجلة السينمائية + شبكة «كل الأدوات» المصنفة (نمط iLovePDF) ─── */
         <>
-          <ServiceWheel dragOver={dragOver} onPick={handleServicePick} onGeneric={openGenericPicker} />
+          <ServiceWheel
+            dragOver={dragOver}
+            onPick={handleServicePick}
+            onGeneric={openGenericPicker}
+            onToolPick={handleHubPick}
+          />
           <ToolsGrid onPick={handleGridPick} />
         </>
       ) : (
@@ -775,56 +778,28 @@ export function Workbench() {
             </div>
           )}
 
-          {/* ─── شريط الأدوات: أدوات القسم النشط فقط — بلا قسم كل الأدوات ─── */}
-          <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
-            {(sector ? TOOLBAR.filter(({ id }) => sector.tools.includes(id)) : TOOLBAR).map(({ id }) => {
-              const isEditor = id === "editor";
-              const isCad = id === "cad_viewer";
-              const ok = isEditor ? editorEnabled : isCad ? cadEnabled : toolEnabled(id as OpId);
-              const active = isEditor ? editing : isCad ? cadOpen : tool === id;
-              return (
-                <button
-                  key={id}
-                  data-testid={`tb-${id}`}
-                  onClick={() => {
-                    if (isEditor) {
-                      if (ok) {
-                        setTool(null);
-                        setEditing(true);
-                      } else toast.info(t("msg.selectPdfOrImage"));
-                      return;
-                    }
-                    if (isCad) {
-                      if (ok) {
-                        setTool(null);
-                        setEditing(false);
-                        setCadOpen(true);
-                      } else toast.info(t("cad.addFirst"));
-                      return;
-                    }
-                    if (ok) {
-                      setEditing(false);
-                      /* النقر على «فصل» أو «دمج صفحات» أو «توقيع» وهي مفتوحة يغلقها */
-                      if ((id === "split" || id === "merge_pages" || id === "sign") && tool === id)
-                        setTool(null);
-                      else pickTool(id as OpId);
-                    } else hintDisabled(id as OpId);
-                  }}
-                  className={cn(
-                    "flex min-w-[62px] flex-col items-center gap-1 rounded-xl px-3 py-2 text-[11px] font-bold transition",
-                    active
-                      ? "bg-primary/10 text-primary outline outline-1 outline-primary/30"
-                      : ok
-                        ? "text-muted-foreground hover:bg-primary/5 hover:text-primary"
-                        : "cursor-not-allowed text-muted-foreground/30"
-                  )}
-                >
-                  {TOOL_ICONS[id]}
-                  {t(`tb.${id}`)}
-                </button>
-              );
-            })}
-          </div>
+          {/* ─── شريط الأدوات المنسدل (المحور 3): 6 مجموعات بنمط iLovePDF — حسب الحالة فقط ─── */}
+          <ToolMenuBar
+            sector={sector}
+            tool={tool}
+            editing={editing}
+            cadOpen={cadOpen}
+            editorEnabled={editorEnabled}
+            cadEnabled={cadEnabled}
+            toolEnabled={toolEnabled}
+            onActivate={activateTool}
+          />
+
+          {/* ─── تلميح الاختيار (المحور 2): بلا أداة مفتوحة بعد الرفع — الاختيار يدوي ─── */}
+          {!tool && !editing && !cadOpen && (
+            <div
+              className="mt-3 flex items-center gap-2.5 rounded-2xl border border-primary/25 bg-primary/5 px-4 py-3"
+              data-testid="chooser-hint"
+            >
+              <MousePointerClick className="size-4.5 shrink-0 text-primary" aria-hidden />
+              <p className="text-[13px] font-bold text-primary">{t("ws.chooseTool")}</p>
+            </div>
+          )}
 
           {/* ─── الجسم: ملفات + (فصل بعمودين | صفحات + معاينة) ─── */}
           <div className="mt-4 grid gap-4 lg:grid-cols-[200px_130px_1fr]">

@@ -42,6 +42,9 @@ inject() {
   EV "((F, T) => fetch('/croptest/' + F).then(r => r.blob()).then(b => { const input = document.querySelector('input[type=file]'); const dt = new DataTransfer(); dt.items.add(new File([b], F, { type: T })); input.files = dt.files; input.dispatchEvent(new Event('change', { bubbles: true })); return 'OK ' + F; }))('$1', '$2')"
 }
 open_crop() {
+  # الشريط المنسدل (المحور 3): القص داخل قائمة «تعديل» — تُفتح أولًا
+  EV "(() => { document.querySelector('[data-testid=mb-g-edit]')?.click(); return 'OK menu'; })()" >/dev/null
+  sleep 0.45
   EV "(() => { const b = document.querySelector('[data-testid=tb-image_crop]'); if (!b) return 'NO-BTN'; if (b.className.includes('cursor-not-allowed')) return 'DISABLED'; b.click(); return 'OK clicked'; })()"
 }
 pick_card() {
@@ -150,6 +153,8 @@ wait_preview
 echo "── القسم 8: المحرر — انحدار الاختصارات القائمة ──"
 ck "$(pick_card "crop_clean_me.png")"
 sleep 1
+EV "(() => { document.querySelector('[data-testid=mb-g-edit]')?.click(); return 'OK menu'; })()" >/dev/null
+sleep 0.45
 EV "(() => { const b = document.querySelector('[data-testid=tb-editor]'); if (!b) return 'NO-EDITOR-BTN'; b.click(); return 'OK editor opening'; })()" >/dev/null
 sleep 2.5
 ck "$(EV "(() => !!document.querySelector('[data-testid=editor-layer]') ? 'OK editor open' : 'NO editor')()")"

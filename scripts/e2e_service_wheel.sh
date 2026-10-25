@@ -6,9 +6,9 @@
 #  (4) التحويم على قسم يزيحه خارجيًا (transform translate)
 #  (5) قسم أوتوكاد ← فلتر المنتقي .dwg,.dxf + إضافة DWG ← العارض يفتح تلقائيًا
 #  (6) إزالة الملف ← العجلة تعود
-#  (7) قسم OCR ← القب العام + إضافة PDF ← أداة OCR تنشط تلقائيًا
-#  (8) قسم Word/Excel ← أداة pdf_to_word تنشط تلقائيًا
-#  (9) قسم تعديل وتوقيع ← المحرر ينفتح تلقائيًا (tb-editor نشط)
+#  (7) قسم OCR ← لا تنشيط تلقائي (المحور 2) + تلميح الاختيار ← الفتح اليدوي من قائمة تحسين
+#  (8) قسم Word/Excel ← لا تنشيط تلقائي ← فتح يدوي من قائمة تحويل
+#  (9) قسم تعديل وتوقيع ← لا محرر تلقائي ← فتح يدوي من قائمة تعديل
 # (10) زر الاختيار العام ← لا أداة تُفعّل (مساحة عامة)
 # (11) الجوال 390px: العجلة تختفي وتظهر شبكة 6 بطاقات + بطاقة صور ← قبول image/*
 # (12) لقطة سطح مكتب أثناء التحويم + لقطة الجوال
@@ -66,6 +66,15 @@ seg_accept() {
 }
 tb_active() {
   EV "(() => { const b = document.querySelector('[data-testid=tb-$1]'); return b ? (b.className.includes('bg-primary/10') ? 'OK active' : 'INACTIVE') : 'NO-BTN'; })()"
+}
+# فتح قائمة مجموعة في الشريط المنسدل (المحور 3) — الأدوات داخلها فقط حينها في الـ DOM
+openmenu() {
+  EV "(() => { const b = document.querySelector('[data-testid=mb-g-$1]'); if (!b) return 'NO-MENU-$1'; b.click(); return 'OK menu-$1'; })()" >/dev/null
+  sleep 0.45
+}
+# لا أداة نشطة إطلاقًا بعد الرفع — جوهر المحور 2
+no_auto() {
+  EV "(() => { const act = Array.from(document.querySelectorAll('[data-testid^=tb-]')).filter(b => b.className.includes('bg-primary/10')); const hint = document.querySelector('[data-testid=chooser-hint]'); return act.length === 0 && hint ? 'OK no auto tool + hint' : 'BAD active=' + act.length + ' hint=' + !!hint; })()"
 }
 # محاكاة التحويم: CDP mouse move يطلق pointermove/mousemove فقط دون أحداث الحدود
 # (mouseover/mouseenter) — والفأرة الحقيقية تولّدها طبيعيًا؛ للمتصفح الآلي نرسل mouseover متدفق
@@ -130,30 +139,48 @@ ck "$(EV "(() => document.querySelector('[data-testid=wheel-root]') ? 'OK wheel 
 ACC2=$(seg_accept)
 if [ "$ACC2" = ".pdf,image/*" ]; then ck "OK accept reset ($ACC2)"; else ck "FAIL reset=$ACC2"; fi
 
-echo "═══ 7) قسم OCR ← أداة تلقائية ═══"
+echo "═══ 7) قسم OCR ← بلا تنشيط تلقائي + فتح يدوي ═══"
 $B reload >/dev/null 2>&1; sleep 3.5  # بداية باردة لكل خدمة — عزل الحالة ومحاكاة رحلة مستخدم حقيقي
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-ocr]').click(); return 'OK clicked ocr'; })()")"
 sleep 0.6
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
+ck "$(no_auto)"
+openmenu optimize
+ck "$(EV "(() => { const b = document.querySelector('[data-testid=tb-ocr]'); if (!b) return 'NO-BTN'; b.click(); return 'OK ocr picked'; })()")"
+sleep 1.2
+ck "$(EV "(() => { document.querySelector('[data-testid=mb-g-optimize]')?.click(); return 'OK reopen'; })()")"
+sleep 0.45
 ck "$(tb_active ocr)"
 
-echo "═══ 8) قسم Word/Excel ═══"
+echo "═══ 8) قسم Word/Excel ← بلا تنشيط تلقائي + فتح يدوي ═══"
 ck "$(remove_all)"
 $B reload >/dev/null 2>&1; sleep 3.5
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-office]').click(); return 'OK clicked office'; })()")"
 sleep 0.6
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
+ck "$(no_auto)"
+openmenu convert
+ck "$(EV "(() => { const b = document.querySelector('[data-testid=tb-pdf_to_word]'); if (!b) return 'NO-BTN'; b.click(); return 'OK word picked'; })()")"
+sleep 1.2
+ck "$(EV "(() => { document.querySelector('[data-testid=mb-g-convert]')?.click(); return 'OK reopen'; })()")"
+sleep 0.45
 ck "$(tb_active pdf_to_word)"
 
-echo "═══ 9) قسم تعديل وتوقيع ← المحرر ═══"
+echo "═══ 9) قسم تعديل وتوقيع ← لا محرر تلقائي + فتح يدوي ═══"
 ck "$(remove_all)"
 $B reload >/dev/null 2>&1; sleep 3.5
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-edit]').click(); return 'OK clicked edit'; })()")"
 sleep 0.6
 ck "$(inject crop_clean_me.png image/png)"
 sleep 3.5
+ck "$(no_auto)"
+openmenu edit
+ck "$(EV "(() => { const b = document.querySelector('[data-testid=tb-editor]'); if (!b) return 'NO-BTN'; b.click(); return 'OK editor picked'; })()")"
+sleep 1.5
+ck "$(EV "(() => { document.querySelector('[data-testid=mb-g-edit]')?.click(); return 'OK reopen'; })()")"
+sleep 0.45
 ck "$(tb_active editor)"
 
 echo "═══ 10) الزر العام ← بلا أداة ═══"

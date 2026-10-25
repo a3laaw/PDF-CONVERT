@@ -1,8 +1,8 @@
 #!/bin/bash
 # E2E — المحاور الثلاثة (Task 51):
-#  (A) شبكة «كل الأدوات» المصنفة: تبويبات iLovePDF الستة + توزيع 26 كارتًا + كارت ← أداة
+#  (A) شبكة «كل الأدوات» المصنفة: تبويبات iLovePDF الستة + توزيع 26 كارتًا + كارت ← منتقي مفلتر بالنوع (المحور 1)
 #  (B) زر «الرجوع للعجلة»: ديالوج الجلسة النظيفة (إلغاء يبقي / تأكيد يمسح) + الوضع العام والقسم
-#  (C) شاشة الوجهين «الأصل ↔ المعدّل»: تدوير/ختم/ترقيم PDF + أبعاد/صيغة صورة + زر التنفيذ
+#  (C) شاشة الوجهين «الأصل ↔ المعدّل»: تدوير/ختم/ترقيم PDF + أبعاد/صيغة صورة + زر التنفيذ — فتح يدوي من القوائم
 #  (D) الجوال 390px + الكونسول (hydration=0 صرامة كاملة)
 # دروس مثبتة: اللغة تُبذر في localStorage · النقر عبر eval .click() · الحقن عبر DataTransfer
 # لقطات triad_01-04
@@ -32,6 +32,11 @@ remove_all() {
   done
   sleep 1
   echo "OK clean"
+}
+# فتح قائمة مجموعة في الشريط المنسدل (المحور 3) — الأدوات داخلها فقط حينها في الـ DOM
+openmenu() {
+  EV "(() => { const b = document.querySelector('[data-testid=mb-g-$1]'); if (!b) return 'NO-MENU-$1'; b.click(); return 'OK menu-$1'; })()" >/dev/null
+  sleep 0.45
 }
 cold() { $B reload >/dev/null 2>&1; sleep 3.5; }
 
@@ -65,14 +70,20 @@ tabclick info;      ck "$([ "$(cnt)" = "2" ] && echo "OK معلومات=2" || ec
 EV "(() => { document.querySelector('[data-testid=grid-tab-all]')?.click(); return 'all'; })()" >/dev/null
 ck "$(EV "(() => { const n = document.querySelectorAll('[data-testid^=grid-tab-]:not([data-testid=grid-tab-all])').length; const names = ['tg-merge','tg-nup','tg-compress','tg-ocr','tg-pdf_to_word','tg-image_convert','tg-editor','tg-sign','tg-metadata'].filter(id => !document.querySelector('[data-testid=' + id + ']')); return n === 6 && names.length === 0 ? 'OK key cards present' : 'BAD missing=' + names.join(','); })()")"
 
-echo "═══ (A3) كارت بلا ملفات ← منتقي + تنشيط تلقائي ═══"
-ck "$(EV "(() => { document.querySelector('[data-testid=tg-compress]')?.click(); return 'OK clicked compress card'; })()")"
+echo "═══ (A3) كارت بلا ملفات ← منتقي مفلتر بالنوع + بلا تنشيط تلقائي ═══"
+ck "$(EV "(() => { document.querySelector('[data-testid=tg-merge]')?.click(); return 'OK clicked merge card'; })()")"
 sleep 0.8
 ACC=$(EV "(() => document.querySelector('input[type=file]')?.accept ?? 'NO')()")
-ck "$([ "$ACC" = ".pdf,image/*" ] && echo "OK generic accept" || echo "BAD accept=$ACC")"
+ck "$([ "$ACC" = ".pdf" ] && echo "OK pdf-only accept" || echo "BAD accept=$ACC")"
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
-ck "$(EV "(() => { const b = document.querySelector('[data-testid=tb-compress]'); return b && b.className.includes('bg-primary/10') ? 'OK compress auto-active' : 'BAD not active'; })()")"
+NOAUTO=$(EV "(() => { const act = Array.from(document.querySelectorAll('[data-testid^=tb-]')).filter(b => b.className.includes('bg-primary/10')); return act.length === 0 && document.querySelector('[data-testid=chooser-hint]') ? 'OK no auto tool + hint' : 'BAD active=' + act.length; })()")
+ck "$NOAUTO"
+openmenu optimize
+ck "$(EV "(() => { const b = document.querySelector('[data-testid=tb-compress]'); if (!b) return 'NO-BTN'; b.click(); return 'OK compress picked'; })()")"
+sleep 1.2
+openmenu optimize
+ck "$(EV "(() => { const b = document.querySelector('[data-testid=tb-compress]'); return b && b.className.includes('bg-primary/10') ? 'OK compress active' : 'BAD not active'; })()")"
 
 echo "═══ (B1) زر الرجوع في الوضع العام + ديالوج ═══"
 ck "$(EV "(() => document.querySelector('[data-testid=generic-bar]')?.querySelector('[data-testid=home-wheel]') ? 'OK home btn' : 'BAD no home')()")"
@@ -110,6 +121,7 @@ ck "$(EV "(() => { document.querySelector('[data-testid=wheel-pick-btn]')?.click
 sleep 0.8
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
+openmenu edit
 ck "$(EV "(() => { document.querySelector('[data-testid=tb-rotate]')?.click(); return 'OK rotate picked'; })()")"
 sleep 1.5
 ck "$(EV "(() => document.querySelector('[data-testid=compare-root]') ? 'OK compare-root' : 'BAD no compare')()")"
@@ -121,6 +133,7 @@ ck "$(EV "(() => { const p = document.querySelector('[data-testid=compare-previe
 ck "$(EV "(() => { const b = document.querySelector('[data-testid=compare-execute]'); return b && !b.disabled ? 'OK execute btn' : 'BAD btn'; })()")"
 
 echo "═══ (C2) الختم والترقيم — معاينة كانفس حية ═══"
+openmenu edit
 ck "$(EV "(() => { document.querySelector('[data-testid=tb-watermark]')?.click(); return 'OK'; })()")"
 sleep 1.5
 L1=$(EV "(() => document.querySelector('[data-testid=compare-preview] img')?.src.length ?? 0)()")
@@ -129,6 +142,7 @@ ck "$(EV "(() => { const s = document.querySelector('[data-testid=field-text]');
 sleep 1
 L2=$(EV "(() => document.querySelector('[data-testid=compare-preview] img')?.src.length ?? 0)()")
 ck "$([ "$L1" != "$L2" ] && echo "OK live update ($L1→$L2)" || echo "BAD same len")"
+openmenu edit
 ck "$(EV "(() => { document.querySelector('[data-testid=tb-page_numbers]')?.click(); return 'OK'; })()")"
 sleep 1.5
 ck "$(EV "(() => { const p = document.querySelector('[data-testid=compare-preview] img'); return p && p.src.startsWith('data:image') ? 'OK numbers preview' : 'BAD'; })()")"
@@ -137,10 +151,12 @@ echo "═══ (C3) صورة — أبعاد وصيغة ═══"
 cold
 ck "$(inject crop_clean_me.png image/png)"
 sleep 3
+openmenu edit
 ck "$(EV "(() => { document.querySelector('[data-testid=tb-image_resize]')?.click(); return 'OK'; })()")"
 sleep 1.5
 ck "$(EV "(() => document.querySelector('[data-testid=compare-root]') ? 'OK resize compare' : 'BAD')()")"
 ck "$(EV "(() => document.body.textContent.includes('px') ? 'OK dims label' : 'BAD no label')()")"
+openmenu convert
 ck "$(EV "(() => { document.querySelector('[data-testid=tb-image_convert]')?.click(); return 'OK'; })()")"
 sleep 1
 ck "$(EV "(() => document.body.textContent.includes('JPEG') ? 'OK format badge' : 'BAD')()")"

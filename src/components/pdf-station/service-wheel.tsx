@@ -20,6 +20,9 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { TOOL_GROUPS, type ToolGroup } from "@/lib/tools-catalog";
+import { MENU_GROUPS, toolLabel } from "@/components/pdf-station/tool-menu-bar";
+import { TOOL_ICONS } from "@/components/pdf-station/tool-icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { FileKind, OpId } from "@/lib/types";
@@ -37,8 +40,8 @@ export interface ServicePick {
   kinds: FileKind[];
   /** أدوات القسم فقط — تظهر وحدها في شريط الأدوات داخل مساحة العمل */
   tools: SectorTool[];
-  /** ما يُفعَّل تلقائيًا بعد إضافة الملفات */
-  then?: { tool?: OpId; cad?: boolean; editor?: boolean };
+  /** الاستثناء الوحيد للقفز التلقائي: غرفة أوتوكاد — العارض هو وظيفة الغرفة ذاتها (المحور 2) */
+  then?: { cad?: boolean };
 }
 
 export const WHEEL_SERVICES: ServicePick[] = [
@@ -71,21 +74,18 @@ export const WHEEL_SERVICES: ServicePick[] = [
     accept: ".pdf",
     kinds: ["pdf"],
     tools: ["pdf_to_word", "pdf_to_excel"],
-    then: { tool: "pdf_to_word" },
   },
   {
     id: "ocr",
     accept: ".pdf,image/*",
     kinds: ["pdf", "image"],
     tools: ["ocr", "extract_text"],
-    then: { tool: "ocr" },
   },
   {
     id: "edit",
     accept: ".pdf,image/*",
     kinds: ["pdf", "image"],
     tools: ["editor"],
-    then: { editor: true },
   },
 ];
 
@@ -198,15 +198,21 @@ export function ServiceWheel({
   dragOver,
   onPick,
   onGeneric,
+  onToolPick,
 }: {
   dragOver: boolean;
   onPick: (svc: ServicePick) => void;
   /** الزر العام «اختر ملفاتك» — يفتح المنتقي بلا قسم (الوضع العام: كل الأدوات) */
   onGeneric?: () => void;
+  /** أيقونات مركز الترس (المحور 4): فتح أداة مباشرة — منتقي مفلتر بالنوع بلا ملفات */
+  onToolPick?: (id: OpId | "editor") => void;
 }) {
   const { t } = useI18n();
   const [hover, setHover] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
+  /* شريط الأيقونات المصغّرة — يفتح من مركز الترس (المحور 4) */
+  const [hubOpen, setHubOpen] = useState(false);
+  const [hubTab, setHubTab] = useState<ToolGroup | "all">("all");
 
   /* دوران الترس: سرعة مستهدفة + نعومة lerp — تحديث مباشر للنمط بلا re-render */
   const angle = useMotionValue(0);
@@ -351,14 +357,24 @@ export function ServiceWheel({
           );
         })}
 
-        {/* المحور الزجاجي */}
-        <div className="absolute inset-[29%] flex flex-col items-center justify-center rounded-full border border-white/70 bg-white/85 shadow-inner backdrop-blur-md text-center px-3" data-testid="wheel-hub">
+        {/* المحور الزجاجي — زر يفتح/يغلق شريط الأيقونات المصغّرة (المحور 4) */}
+        <button
+          type="button"
+          data-testid="wheel-hub"
+          aria-expanded={hubOpen}
+          aria-label={t("hub.aria")}
+          onClick={() => setHubOpen((o) => !o)}
+          className={cn(
+            "absolute inset-[29%] flex cursor-pointer flex-col items-center justify-center rounded-full border border-white/70 bg-white/85 shadow-inner backdrop-blur-md text-center px-3 outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-primary/50",
+            hubOpen && "ring-2 ring-primary/40"
+          )}
+        >
           <span className="grid size-11 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/30">
             <Settings className="size-5.5 wheel-spin-rev" aria-hidden />
           </span>
           <span className="mt-2 text-base font-black leading-tight">{t("site.name")}</span>
           <span className="mt-0.5 text-[10.5px] font-bold text-muted-foreground leading-tight">{t("wheel.hubSub")}</span>
-        </div>
+        </button>
       </motion.div>
 
       {/* ═══ شبكة الجوال — < sm: بطاقات بنفس الوظائف ═══ */}
@@ -386,6 +402,79 @@ export function ServiceWheel({
           );
         })}
       </div>
+
+      {/* ═══ شريط الأيقونات المصغّرة — يفتح من مركز الترس (المحور 4) ═══
+          «الكل» = كل الأدوات مجمعة، أو فلتر بمجموعة واحدة — النقر يفتح الأداة مباشرة */}
+      {hubOpen && (
+        <div
+          className="relative mx-auto mt-6 max-w-2xl rounded-2xl border border-border bg-white/95 p-4 shadow-lg shadow-black/5"
+          data-testid="hub-strip"
+        >
+          <p className="text-center text-sm font-extrabold">{t("hub.title")}</p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5" role="tablist" aria-label={t("hub.title")}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={hubTab === "all"}
+              data-testid="hub-tab-all"
+              onClick={() => setHubTab("all")}
+              className={cn(
+                "rounded-full px-3.5 py-1.5 text-[11px] font-extrabold transition",
+                hubTab === "all"
+                  ? "bg-primary text-primary-foreground shadow-md shadow-primary/25"
+                  : "border border-border bg-white/80 text-muted-foreground hover:border-primary/40 hover:text-primary"
+              )}
+            >
+              {t("grp.all")}
+            </button>
+            {TOOL_GROUPS.map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                role="tab"
+                aria-selected={hubTab === g.id}
+                data-testid={`hub-tab-${g.id}`}
+                onClick={() => setHubTab(g.id)}
+                className={cn(
+                  "rounded-full px-3.5 py-1.5 text-[11px] font-extrabold transition",
+                  hubTab === g.id
+                    ? "bg-primary text-primary-foreground shadow-md shadow-primary/25"
+                    : "border border-border bg-white/80 text-muted-foreground hover:border-primary/40 hover:text-primary"
+                )}
+              >
+                {t(`grp.${g.id}`)}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4 grid grid-cols-4 gap-1.5 sm:grid-cols-6" data-testid="hub-icons">
+            {(hubTab === "all"
+              ? MENU_GROUPS.flatMap((g) => g.ids)
+              : MENU_GROUPS.find((g) => g.gid === hubTab)?.ids ?? []
+            ).map((id) => {
+              const Icon = TOOL_ICONS[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  data-testid={`hub-icon-${id}`}
+                  aria-label={toolLabel(id, t)}
+                  onClick={() => {
+                    setHubOpen(false);
+                    onToolPick?.(id);
+                  }}
+                  className="group flex flex-col items-center gap-1 rounded-xl border border-border/70 bg-white p-2 text-center transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-sm"
+                >
+                  <span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary transition group-hover:bg-primary group-hover:text-white [&>svg]:size-4">
+                    {Icon ?? <span aria-hidden>🛠️</span>}
+                  </span>
+                  <span className="line-clamp-1 w-full text-[10px] font-bold leading-tight">{toolLabel(id, t)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* زر عام + تلميح الإفلات */}
       <div className="relative mt-8 flex flex-col items-center gap-2.5">
