@@ -520,11 +520,35 @@ export function Workbench() {
     appendResult(name, blob, "crop");
   };
 
+  /* تاريخ تنظيف القص — أكوام أرقام الإصدارات للتراجع Ctrl+Z والإعادة Ctrl+Y
+     (كل تنظيف يولّد نسخة جديدة والأصل يظل محفوظًا في القائمة، فالتراجع = إعادة تفعيل النسخة السابقة) */
+  const cropUndoRef = useRef<string[]>([]);
+  const cropRedoRef = useRef<string[]>([]);
+
   /* نتيجة تنظيف: تُضاف وتصير ملف العمل النشط — تكمل التنضيف على النسخة الجديدة */
   const cropCleaned = async (name: string, blob: Blob) => {
     appendResult(name, blob, "crop");
+    if (activeFile) cropUndoRef.current.push(activeFile.id);
+    cropRedoRef.current = [];
     const newId = await addResultAsFile(name, blob);
     setActiveId(newId);
+  };
+
+  /* التراجع عن آخر تنظيف: النسخة السابقة تعود ملف العمل — يعيد true إن وجد ما يُتراجع عنه */
+  const cropUndoFn = () => {
+    const prev = cropUndoRef.current.pop();
+    if (!prev || !activeFile) return false;
+    cropRedoRef.current.push(activeFile.id);
+    setActiveId(prev);
+    return true;
+  };
+  /* الإعادة: النسخة المنضيفة تعود بعد تراجع — يعيد true إن وجد ما يُعاد */
+  const cropRedoFn = () => {
+    const next = cropRedoRef.current.pop();
+    if (!next || !activeFile) return false;
+    cropUndoRef.current.push(activeFile.id);
+    setActiveId(next);
+    return true;
   };
 
   /* اسم زرّ الأداة السياقي: الفعل + عدد الصفحات المختارة إن وُجد */
@@ -828,6 +852,8 @@ export function Workbench() {
                   onClose={() => setTool(null)}
                   onSavePiece={cropPieceSaved}
                   onCleaned={cropCleaned}
+                  onUndo={cropUndoFn}
+                  onRedo={cropRedoFn}
                 />
               </div>
             ) : signMode ? (

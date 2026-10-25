@@ -35,6 +35,10 @@ interface Props {
   onSavePiece: (name: string, blob: Blob) => Promise<void>;
   /** نتيجة تنظيف: تُضاف وتصير ملف العمل النشط — تكمل التنضيف على النسخة الجديدة */
   onCleaned: (name: string, blob: Blob) => Promise<void>;
+  /** تراجع عن آخر تنظيف (Ctrl+Z) — يعيد تفعيل النسخة السابقة؛ يعيد true إن وجد ما يُتراجع عنه */
+  onUndo: () => boolean;
+  /** إعادة آخر تنظيف مُتراجع عنه (Ctrl+Y / Ctrl+Shift+Z)؛ يعيد true إن وجد */
+  onRedo: () => boolean;
 }
 
 /* ─────────── رياضيات التحديد ─────────── */
@@ -97,6 +101,8 @@ export function CropPanel({
   onClose,
   onSavePiece,
   onCleaned,
+  onUndo,
+  onRedo,
 }: Props) {
   const { t } = useI18n();
   const [preview, setPreview] = useState("");
@@ -330,6 +336,50 @@ export function CropPanel({
     }
   };
 
+  /* ── اختصارات لوحة المفاتيح — كماليات زي الرسام ──
+     Delete / Backspace: يحذف المنطقة المحددة من الصفحة (تنظيف نهائي)
+     Ctrl+Z: تراجع عن آخر تنظيف — وإن لم يوجد ما يُتراجع عنه فَلغي التحديد
+     Ctrl+Shift+Z أو Ctrl+Y: إعادة · Esc: إلغاء التحديد */
+  const cleanRef = useRef(cleanRegion);
+  cleanRef.current = cleanRegion;
+  const undoRef = useRef(onUndo);
+  undoRef.current = onUndo;
+  const redoRef = useRef(onRedo);
+  redoRef.current = onRedo;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.isContentEditable)) return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (sel && !busy) {
+          e.preventDefault();
+          cleanRef.current();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (redoRef.current()) toast.success(t("crop.redone"));
+        } else if (undoRef.current()) {
+          toast.success(t("crop.undone"));
+        } else {
+          setSel(null); /* لا تاريخ؟ التراجع يلغي التحديد زي الرسام */
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        if (redoRef.current()) toast.success(t("crop.redone"));
+        return;
+      }
+      if (e.key === "Escape" && sel) setSel(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sel, busy, t]);
+
   const sw = sel ? (sel.x1 - sel.x0) * 100 : 0;
   const sh = sel ? (sel.y1 - sel.y0) * 100 : 0;
 
@@ -440,6 +490,7 @@ export function CropPanel({
               disabled={busy}
               variant="outline"
               data-testid="crop-clean"
+              title={`${t("crop.clean")} · Delete`}
               className="border-red-200 font-extrabold text-red-600 hover:bg-red-50 hover:text-red-700"
             >
               <Eraser className="size-4" aria-hidden />
@@ -456,6 +507,12 @@ export function CropPanel({
             {t("crop.clear")}
           </button>
 
+          <p
+            data-testid="crop-kbd"
+            className="rounded-lg bg-muted/60 px-2.5 py-1.5 text-[10px] font-bold leading-relaxed text-muted-foreground"
+          >
+            {t("crop.kbd")}
+          </p>
           <p className="text-[11px] leading-relaxed text-muted-foreground">{t("crop.hint")}</p>
           <p className="text-[10px] leading-relaxed text-muted-foreground/80">{t("crop.cleanNote")}</p>
         </div>
