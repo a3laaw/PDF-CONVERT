@@ -22,25 +22,83 @@ import {
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import type { OpId } from "@/lib/types";
+import type { FileKind, OpId } from "@/lib/types";
 
-/* ─── تعريف الخدمة: تربط قسم العجلة بوظيفة حقيقية في مساحة العمل ─── */
+/* ─── تعريف الخدمة: تربط قسم العجلة بوظيفة حقيقية في مساحة العمل ───
+   كل قسم «غرفة مستقلة»: امتداداته فقط + أدواته فقط.
+   إضافة قسم جديد = سطر واحد هنا + مفاتيح wheel.svc.* في القواميس الثلاثة */
+export type SectorTool = OpId | "editor" | "cad_viewer";
+
 export interface ServicePick {
   id: "pdf" | "images" | "cad" | "office" | "ocr" | "edit";
   /** قيمة accept لمنتقي الملفات */
   accept: string;
+  /** أنواع الملفات المسموحة في هذا القسم — تُرفض كل أخرى عند الإفلات والإضافة */
+  kinds: FileKind[];
+  /** أدوات القسم فقط — تظهر وحدها في شريط الأدوات داخل مساحة العمل */
+  tools: SectorTool[];
   /** ما يُفعَّل تلقائيًا بعد إضافة الملفات */
   then?: { tool?: OpId; cad?: boolean; editor?: boolean };
 }
 
 export const WHEEL_SERVICES: ServicePick[] = [
-  { id: "pdf", accept: ".pdf" },
-  { id: "images", accept: "image/*" },
-  { id: "cad", accept: ".dwg,.dxf", then: { cad: true } },
-  { id: "office", accept: ".pdf", then: { tool: "pdf_to_word" } },
-  { id: "ocr", accept: ".pdf,image/*", then: { tool: "ocr" } },
-  { id: "edit", accept: ".pdf,image/*", then: { editor: true } },
+  {
+    id: "pdf",
+    accept: ".pdf",
+    kinds: ["pdf"],
+    tools: [
+      "editor", "compress", "merge", "merge_pages", "split", "extract",
+      "delete", "rotate", "reorder", "page_numbers", "watermark",
+      "remove_watermark", "sign", "protect", "unlock", "pdf_to_images",
+      "extract_text", "image_crop",
+    ],
+  },
+  {
+    id: "images",
+    accept: "image/*",
+    kinds: ["image"],
+    tools: ["compress", "rotate", "image_convert", "image_resize", "image_crop", "images_to_pdf"],
+  },
+  {
+    id: "cad",
+    accept: ".dwg,.dxf",
+    kinds: ["cad"],
+    tools: ["cad_viewer"],
+    then: { cad: true },
+  },
+  {
+    id: "office",
+    accept: ".pdf",
+    kinds: ["pdf"],
+    tools: ["pdf_to_word", "pdf_to_excel"],
+    then: { tool: "pdf_to_word" },
+  },
+  {
+    id: "ocr",
+    accept: ".pdf,image/*",
+    kinds: ["pdf", "image"],
+    tools: ["ocr", "extract_text"],
+    then: { tool: "ocr" },
+  },
+  {
+    id: "edit",
+    accept: ".pdf,image/*",
+    kinds: ["pdf", "image"],
+    tools: ["editor"],
+    then: { editor: true },
+  },
 ];
+
+/** هل يملك الملف نوعًا يقبله القسم؟ — فحص بالامتداد والـ MIME لحظة الإدخال
+    (بوابة موحّدة للسحب والإفلات ولمنتقي الملفات — المرفوض يترفض برسالة ودودة) */
+export function fileFitsSector(file: File, svc: ServicePick): boolean {
+  const n = file.name.toLowerCase();
+  const mime = file.type;
+  if (svc.kinds.includes("pdf") && (mime === "application/pdf" || n.endsWith(".pdf"))) return true;
+  if (svc.kinds.includes("image") && (mime.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/.test(n))) return true;
+  if (svc.kinds.includes("cad") && /\.(dwg|dxf|rvt)$/.test(n)) return true;
+  return false;
+}
 
 /* ─── هندسة العجلة: مسرح 400×400 ─── */
 const CX = 200;
@@ -68,8 +126,9 @@ function sectorPath(r0: number, r1: number, a0: number, a1: number) {
   return `M ${f(p1.x)} ${f(p1.y)} A ${r1} ${r1} 0 ${laf} 1 ${f(p2.x)} ${f(p2.y)} L ${f(p3.x)} ${f(p3.y)} A ${r0} ${r0} 0 ${laf} 0 ${f(p4.x)} ${f(p4.y)} Z`;
 }
 
-/* ألوان الخدمات — من هوية الموقع (بنفسجي الموقع + التركواز) وأسرتان مميزتان */
-const SVC_COLOR: Record<ServicePick["id"], string> = {
+/* ألوان الخدمات — من هوية الموقع (بنفسجي الموقع + التركواز) وأسرتان مميزتان
+   مُصدَّرة لشارة القسم في مساحة العمل */
+export const SVC_COLOR: Record<ServicePick["id"], string> = {
   pdf: "#4f55e3",
   images: "#0d9488",
   cad: "#0284c7",
@@ -78,7 +137,7 @@ const SVC_COLOR: Record<ServicePick["id"], string> = {
   edit: "#d97706",
 };
 
-const SVC_ICON: Record<ServicePick["id"], typeof FileText> = {
+export const SVC_ICON: Record<ServicePick["id"], typeof FileText> = {
   pdf: FileText,
   images: ImageIcon,
   cad: DraftingCompass,
@@ -132,7 +191,16 @@ const GearRing = memo(function GearRing({ rotate }: { rotate: ReturnType<typeof 
 });
 
 /* ─── المكوّن الرئيسي ─── */
-export function ServiceWheel({ dragOver, onPick }: { dragOver: boolean; onPick: (svc: ServicePick) => void }) {
+export function ServiceWheel({
+  dragOver,
+  onPick,
+  onGeneric,
+}: {
+  dragOver: boolean;
+  onPick: (svc: ServicePick) => void;
+  /** الزر العام «اختر ملفاتك» — يفتح المنتقي بلا قسم (الوضع العام: كل الأدوات) */
+  onGeneric?: () => void;
+}) {
   const { t } = useI18n();
   const [hover, setHover] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
@@ -150,11 +218,11 @@ export function ServiceWheel({ dragOver, onPick }: { dragOver: boolean; onPick: 
     angle.set((angle.get() + vel.current * (delta / 16.7)) % 360);
   });
 
-  const pick = (svc: ServicePick) => {
+  const pick = (svc: ServicePick | null) => {
     if (picked) return;
-    setPicked(svc.id);
+    setPicked(svc ? svc.id : "all");
     boost.current = 3.4; // قفزة دورة سينمائية ثم تباطؤ لطيف
-    window.setTimeout(() => onPick(svc), 260);
+    window.setTimeout(() => (svc ? onPick(svc) : onGeneric?.()), 260);
     window.setTimeout(() => setPicked(null), 1500); /* أُلغي المنتقي؟ العجلة تعود */
   };
 
@@ -322,7 +390,7 @@ export function ServiceWheel({ dragOver, onPick }: { dragOver: boolean; onPick: 
           size="lg"
           className="font-extrabold px-8 gap-2 shadow-lg shadow-primary/25"
           data-testid="wheel-pick-btn"
-          onClick={() => pick(WHEEL_SERVICES[0] && { ...WHEEL_SERVICES[0], accept: ".pdf,image/*" })}
+          onClick={() => pick(null)}
         >
           <UploadCloud className="size-5" aria-hidden />
           {t("hero.pick")}

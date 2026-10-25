@@ -3,7 +3,7 @@
 /* شاشة العمل الجديدة — عرض الملف + شريط أدوات واحد، بدون أوامر نصية ولا شرح */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, FileOutput, Pencil, RotateCw, Trash2, X } from "lucide-react";
+import { Check, Copy, FileOutput, LayoutGrid, Pencil, RotateCw, Trash2, X } from "lucide-react";
 import { useWorkspace } from "@/store/workspace";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
@@ -15,7 +15,13 @@ import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { MergePagesPanel } from "@/components/pdf-station/merge-pages-panel";
 import { SignaturePanel } from "@/components/pdf-station/signature-panel";
 import { CropPanel } from "@/components/pdf-station/crop-panel";
-import { ServiceWheel, type ServicePick } from "@/components/pdf-station/service-wheel";
+import {
+  ServiceWheel,
+  fileFitsSector,
+  SVC_COLOR,
+  SVC_ICON,
+  type ServicePick,
+} from "@/components/pdf-station/service-wheel";
 import { toHindiDigits } from "@/lib/arabic";
 import { useI18n, toolKey } from "@/lib/i18n";
 import { toast } from "sonner";
@@ -302,6 +308,44 @@ function extLabel(name: string): string {
   return e === "JPG" ? "JPG" : e;
 }
 
+/* ─────────── شارة القسم النشط ─────────── */
+
+/** شارة «الغرفة المستقلة»: اسم القسم بلونه وأيقونته + تلميح الأدوات المفلترة + مخرج دائم للوضع العام */
+function SectorChip({ sector, onExit }: { sector: ServicePick; onExit: () => void }) {
+  const { t } = useI18n();
+  const Icon = SVC_ICON[sector.id];
+  const color = SVC_COLOR[sector.id];
+  return (
+    <div
+      data-testid="sector-chip"
+      className="mb-3 flex flex-wrap items-center gap-2.5 rounded-2xl border bg-white p-2.5 shadow-sm"
+      style={{ borderColor: `${color}55` }}
+    >
+      <span
+        className="grid size-9 shrink-0 place-items-center rounded-xl text-white shadow-md"
+        style={{ backgroundColor: color }}
+      >
+        <Icon className="size-4.5" aria-hidden />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-extrabold leading-tight">{t(`wheel.svc.${sector.id}`)}</span>
+        <span className="block text-[11px] text-muted-foreground">{t("wheel.sectorOnly")}</span>
+      </span>
+      <span className="flex-1" />
+      <Button
+        variant="outline"
+        size="sm"
+        data-testid="sector-exit"
+        onClick={onExit}
+        className="gap-1.5 font-bold"
+      >
+        <LayoutGrid className="size-4" aria-hidden />
+        {t("wheel.sectorExit")}
+      </Button>
+    </div>
+  );
+}
+
 /* ─────────── المكوّن ─────────── */
 
 export function Workbench() {
@@ -334,9 +378,12 @@ export function Workbench() {
   const [dragOver, setDragOver] = useState(false);
   const [editing, setEditing] = useState(false);
   const [cadOpen, setCadOpen] = useState(false);
-  /* العجلة السينمائية: فلتر منتقي الملفات + الخدمة المنتظرة (تُفعّل أداة بعد إضافة الملفات) */
-  const [acceptTypes, setAcceptTypes] = useState(".pdf,image/*");
+  /* العجلة السينمائية: القسم النشط حالة ثابتة طول وجود الملفات — «غرفة مستقلة»
+     امتدادات القسم فقط في المنتقي والسحب، وأدواته فقط في الشريط.
+     بلا قسم (دخول مباشر / ?op= / الزر العام) = الوضع العام: كل الأدوات كما كان */
+  const [sector, setSector] = useState<ServicePick | null>(null);
   const [pendingSvc, setPendingSvc] = useState<ServicePick | null>(null);
+  const acceptTypes = sector ? sector.accept : ".pdf,image/*";
   const inputRef = useRef<HTMLInputElement>(null);
   const thumbsReq = useRef<Set<string>>(new Set());
   const bottomBarRef = useRef<HTMLDivElement>(null);
@@ -445,18 +492,37 @@ export function Workbench() {
   const pickToolRef = useRef(pickTool);
   pickToolRef.current = pickTool;
 
-  /* العجلة السينمائية: اختيار خدمة ← فلتر المنتقي ← بعد وصول الملفات تُفعّل وظيفتها الحقيقية */
+  /* العجلة السينمائية: اختيار قسم ← القبول والأدوات تتبع القسم فورًا ← بعد وصول الملفات تُفعّل وظيفتها الحقيقية */
   const handleServicePick = (svc: ServicePick) => {
-    setAcceptTypes(svc.accept);
+    setSector(svc);
     setPendingSvc(svc);
-    inputRef.current?.click();
+    /* أداة مفتوحة لا تنتمي لقسم القسم الجديد؟ تُغلق — الشريط سيعرض أدوات القسم وحدها */
+    if (tool && !svc.tools.includes(tool)) setTool(null);
+    /* ضبط القبول مباشرة قبل الفتح — تحديث حالة React لا يتزامن مع نقرة المنتقي */
+    if (inputRef.current) {
+      inputRef.current.accept = svc.accept;
+      inputRef.current.click();
+    }
   };
+
+  /* الزر العام «اختر ملفاتك»: منتجق بلا قسم — الوضع العام بكل الأدوات */
+  const openGenericPicker = () => {
+    if (inputRef.current) {
+      inputRef.current.accept = ".pdf,image/*";
+      inputRef.current.click();
+    }
+  };
+
+  /* رجوعنا للعجلة (لا ملفات)؟ القسم يُصفّر — الإدخال التالي يبدأ محايدًا */
+  useEffect(() => {
+    if (files.length === 0) setSector(null);
+  }, [files.length]);
 
   useEffect(() => {
     if (!pendingSvc || files.length === 0) return;
     const svc = pendingSvc;
     setPendingSvc(null);
-    setAcceptTypes(".pdf,image/*"); /* العودة للقب العام للإضافات اللاحقة */
+    /* القسم يظل شغالًا — فلتر المنتقي والأدوات يبقى حتى يخرج المستخدم أو يفرّغ المساحة */
     if (svc.then?.cad) {
       setTool(null);
       setEditing(false);
@@ -469,6 +535,21 @@ export function Workbench() {
       pickToolRef.current(svc.then.tool);
     }
   }, [pendingSvc, files.length]);
+
+  /* بوابة الملفات الموحدة: بلا قسم = كل شيء — مع قسم = أنواع القسم فقط والمرفوض يترفض بتوست */
+  const ingestFiles = (fs: File[]) => {
+    if (!fs.length) return;
+    if (!sector) {
+      addFiles(fs);
+      return;
+    }
+    const ok = fs.filter((f) => fileFitsSector(f, sector));
+    if (ok.length) addFiles(ok);
+    if (ok.length < fs.length)
+      toast.error(t("wheel.rejectTitle", { n: fs.length - ok.length }), {
+        description: t("wheel.rejectBody", { name: t(`wheel.svc.${sector.id}`) }),
+      });
+  };
 
   const togglePage = (n: number) => {
     const next = selPages.includes(n)
@@ -678,8 +759,7 @@ export function Workbench() {
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
-        const fs = Array.from(e.dataTransfer.files);
-        if (fs.length) addFiles(fs);
+        ingestFiles(Array.from(e.dataTransfer.files));
       }}
     >
       <input
@@ -689,20 +769,22 @@ export function Workbench() {
         accept={acceptTypes}
         className="hidden"
         onChange={(e) => {
-          const fs = Array.from(e.target.files ?? []);
-          if (fs.length) addFiles(fs);
+          ingestFiles(Array.from(e.target.files ?? []));
           e.target.value = "";
         }}
       />
 
       {files.length === 0 ? (
         /* ─── لا ملفات: العجلة السينمائية ─── */
-        <ServiceWheel dragOver={dragOver} onPick={handleServicePick} />
+        <ServiceWheel dragOver={dragOver} onPick={handleServicePick} onGeneric={openGenericPicker} />
       ) : (
         <>
-          {/* ─── شريط الأدوات ─── */}
+          {/* ─── شارة القسم النشط: أدوات القسم فقط + مخرج دائم للوضع العام ─── */}
+          {sector && <SectorChip sector={sector} onExit={() => setSector(null)} />}
+
+          {/* ─── شريط الأدوات: أدوات القسم النشط فقط — بلا قسم كل الأدوات ─── */}
           <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
-            {TOOLBAR.map(({ id }) => {
+            {(sector ? TOOLBAR.filter(({ id }) => sector.tools.includes(id)) : TOOLBAR).map(({ id }) => {
               const isEditor = id === "editor";
               const isCad = id === "cad_viewer";
               const ok = isEditor ? editorEnabled : isCad ? cadEnabled : toolEnabled(id as OpId);
