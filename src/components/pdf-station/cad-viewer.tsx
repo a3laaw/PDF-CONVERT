@@ -300,20 +300,65 @@ function classifyOpenError(err: unknown): OpenFailKind {
   return "crash";
 }
 
+/* ── ضجيج الكيانات التالفة: المكتبة ترمي Illegal Parameters عند كيانات معطوبة
+   (قوس/سبلاين بصفر قطر أو نقاط متطابقة) أثناء تحويل الكيانات ثم تتجاهله عمدًا
+   وتكمل الفتح — فشل مرحلة ENTITY غير حرج بالتصميم (AcDbDatabaseConverter:
+   «Tasks to convert entities are not critical… we can still continue»).
+   نهدّئ هذه السطور حتى لا تظهر كأخطاء في الكونسول، مع إبقاء أنماط الانهيار
+   القاتلة (نفاد ذاكرة wasm وغيرها) ظاهرة كما هي */
+const FATAL_WASM_RE =
+  /memory access out of bounds|worker_oom|out of memory|abort\(|runtime abort/i;
+const BENIGN_ENTITY_STAGE_RE = /conversion stage ['"]?ENTITY['"]?/i;
+
+/* تنسيق وسيط سجل: الرمز يُلحق فقط عند وجوده — إلحاقه الأعمى كان يترك
+   «code:» فارغة بعد سطر المرحلة فيلتقط الاستخراج اسم الخطأ التالي بدله
+   (كان يعطي code:"Error" بدل code:"worker_oom" في تصنيف الانهيارات) */
+const fmtErrArg = (a: unknown): string => {
+  const m = a as { message?: string; name?: string; code?: string };
+  const base = `${m?.name || ""} ${m?.message || a}`;
+  return m?.code ? `${base} code:${m.code}` : base;
+};
+
+/* فلتر دائم يُثبَّت مرة واحدة لكل جلسة: تحويل الكيانات قد يستمر بعد إقفال
+   نافذة المراقبة (تحويل مؤجل للنصوص والرموز) فتظهر سطور الضجيج نفسها لاحقًا */
+let noiseFilterInstalled = false;
+function installCadNoiseFilter(): void {
+  if (noiseFilterInstalled || typeof window === "undefined") return;
+  noiseFilterInstalled = true;
+  const orig = console.error.bind(console);
+  const quiet = console.debug?.bind(console) ?? orig;
+  console.error = (...args: unknown[]) => {
+    try {
+      const s = args.map(fmtErrArg).join(" ");
+      if (BENIGN_ENTITY_STAGE_RE.test(s) && !FATAL_WASM_RE.test(s)) {
+        quiet(...args);
+        return;
+      }
+    } catch {
+      /* السجل لا يكسر التدفق */
+    }
+    orig(...args);
+  };
+}
+installCadNoiseFilter();
+
 /* مراقبة سجل الأخطاء: المكتبة تسجّل فشل التحليل في console.error لكن وعد openDocument
    لا يُحسم أبدًا عند انهيار عامل wasm (worker_oom) — فتظهر دوّامة أبدية بدل رسالة الخطأ.
-   نكتشف سطر "Error occurred in conversion stage" ونرفض فورًا برمز الخطأ */
+   نكتشف سطر "Error occurred in conversion stage" ونرفض فورًا برمز الخطأ —
+   إلا فشل مرحلة ENTITY غير القاتل: المكتبة تكمل بعده تحويل باقي الكيانات والملف
+   يُفتح سليمًا، ورفضه كان يُسقط ملفات صالحة فيها كيانات تالفة */
 function watchStageFailure(onFail: (code: string) => void): () => void {
   const orig = console.error.bind(console);
   console.error = (...args: unknown[]) => {
     try {
-      const s = args
-        .map((a) => {
-          const m = a as { message?: string; name?: string; code?: string };
-          return `${m?.name || ""} ${m?.message || a} code:${m?.code || ""}`;
-        })
-        .join(" ");
+      const s = args.map(fmtErrArg).join(" ");
       if (/conversion stage/i.test(s)) {
+        const benign = BENIGN_ENTITY_STAGE_RE.test(s) && !FATAL_WASM_RE.test(s);
+        if (benign) {
+          /* كيان تالف واحد يُسقَط والباقي يكمل — سجل هادئ لا رفض ولا ضجيج */
+          (console.debug?.bind(console) ?? orig)(...args);
+          return;
+        }
         const m = /code:\s*"?([A-Za-z_]+)"?/.exec(s);
         onFail(m ? m[1] : "worker_error");
       }
@@ -325,6 +370,84 @@ function watchStageFailure(onFail: (code: string) => void): () => void {
   return () => {
     console.error = orig;
   };
+}
+
+/* ── تحصين التكبير في محرك العارض: zoomTo في AcTrView2d يصل إلى
+   this.activeLayoutView.zoomTo(…) بلا فحص — بينما screenToWorld/worldToScreen
+   محميتان في المكتبة نفسها بفحص مشابه. أثناء تمريرة الملاءمة التقدمية عند فتح
+   الملف أو تبديل التخطيط أو إغلاق العارض أثناء ملاءمة مؤجلة، قد لا يوجد تخطيط
+   نشط بعد — فيرمي «Cannot read properties of undefined (reading 'zoomTo')»
+   متكررًا في الكونسول. نغلّفه بالجذر: لا تخطيط نشط = لا شيء يُكبَّر */
+let zoomProtoHardened = false;
+
+type HardenedZoom = (
+  this: { activeLayoutView?: unknown },
+  box: unknown,
+  margin?: number
+) => void;
+
+function hardenZoomOnProto(proto: object | null): boolean {
+  if (!proto || proto === Object.prototype) return false;
+  const p = proto as Record<string, unknown> & { __zoomSafe?: boolean };
+  if (typeof p.zoomTo === "function") {
+    if (!p.__zoomSafe) {
+      const orig = p.zoomTo as HardenedZoom;
+      p.zoomTo = function (
+        this: { activeLayoutView?: unknown },
+        box: unknown,
+        margin?: number
+      ) {
+        let ready = false;
+        try {
+          ready = this?.activeLayoutView != null;
+        } catch {
+          ready = false;
+        }
+        if (!ready) return;
+        orig.call(this, box, margin);
+      };
+      p.__zoomSafe = true;
+    }
+    zoomProtoHardened = true;
+    return true;
+  }
+  return hardenZoomOnProto(Object.getPrototypeOf(proto));
+}
+
+async function hardenCadZoomTo(): Promise<void> {
+  if (zoomProtoHardened) return;
+  try {
+    const mod = await import("@mlightcad/cad-simple-viewer");
+    const proto = (mod as { AcTrView2d?: { prototype?: object } }).AcTrView2d
+      ?.prototype;
+    if (proto) hardenZoomOnProto(proto);
+  } catch {
+    /* المكتبة غير جاهزة بعد — تُجرَّب مع الفتح القادم */
+  }
+}
+
+/* تحصين على مستوى النسخة: إن تعذّر الوصول للصنف نمشي سلسلة نماذجه بحثًا عن
+   zoomTo، ونغلّف دوال الملاءمة التقدمية المخزّنة على النسخة — مرجعها المغلق
+   يصل إلى activeLayoutView.zoomTo مباشرة فيرمي عند غياب التخطيط */
+function hardenViewInstance(view: unknown): void {
+  if (!view || typeof view !== "object") return;
+  if (!zoomProtoHardened) hardenZoomOnProto(Object.getPrototypeOf(view));
+  const fit = (view as { _progressiveOpenFit?: object })._progressiveOpenFit;
+  const f = fit as Record<string, unknown> & { __fitSafe?: boolean };
+  if (f && !f.__fitSafe) {
+    for (const k of Object.keys(f)) {
+      const fn = f[k];
+      if (typeof fn !== "function") continue;
+      f[k] = function (...args: unknown[]) {
+        try {
+          return (fn as (...a: unknown[]) => unknown).apply(fit, args);
+        } catch {
+          /* ملاءمة على تخطيط غير جاهز — تُهمل بلا ضجيج */
+        }
+      };
+    }
+    f.__fitSafe = true;
+  }
 }
 
 export function CadViewer({ fileName, file, onClose }: Props) {
@@ -378,6 +501,8 @@ export function CadViewer({ fileName, file, onClose }: Props) {
   const getViewFull = useCallback((): CadViewInternal | null => {
     const mgr = mgrRef.current as { curView?: CadViewInternal } | null;
     const v = mgr?.curView;
+    /* تحصين احتياطي على النسخة إن لم يكتمل تحصين الصنف (best-effort، مرة واحدة) */
+    if (v) hardenViewInstance(v);
     return v && typeof v.screenToWorld === "function" && typeof v.zoomTo === "function"
       ? v
       : null;
@@ -444,9 +569,23 @@ export function CadViewer({ fileName, file, onClose }: Props) {
             import("@mlightcad/data-model"),
             import("@mlightcad/cad-simple-viewer"),
           ]);
-        /* مدير واحد في الجلسة — نُصفّي القديم لنربط الكانفس بالحاوية الجديدة */
+        /* تحصين zoomTo قبل إنشاء أي عارض — يحيّد خطأ «reading 'zoomTo'»
+         * القادم من ملاءمة المكتبة التقدمية أثناء الفتح نفسه */
+        await hardenCadZoomTo();
+        /* مدير واحد في الجلسة — نُصفّي القديم لنربط الكانفس بالحاوية الجديدة.
+         * قبل التدمير: تحصين دوال الملاءمة المؤجلة على النسخة القديمة — إغلاق
+         * العارض أثناء ملاءمة معلّقة كان يرمي «reading 'zoomTo'» في الكونسول */
         const existing = simple.AcApDocManager.tryGetInstance();
-        if (existing) await existing.destroy();
+        if (existing) {
+          try {
+            hardenViewInstance(
+              (existing as { curView?: unknown }).curView
+            );
+          } catch {
+            /* لا جلسة نشطة — لا شيء يحتاج تحصينًا */
+          }
+          await existing.destroy();
+        }
         /* DWG عبر LibreDWG (WASM) — وDXF عبر محوّل dxf-json — كلاهما مجاني.
          * مهلة صريحة 5 دقائق: الافتراضي يسقّف عند دقيقتين فتشمل الملفات الكبيرة قبل اكتمال التحليل */
         const { AcDbLibreDwgConverter } = await import(
@@ -559,6 +698,15 @@ export function CadViewer({ fileName, file, onClose }: Props) {
         }
         if (!alive) return;
         if (!ok) throw new Error(openFailKey(failKind));
+        /* تحصين مبكر لدوال الملاءمة المؤجلة على النسخة الجديدة — تمريرة الملاءمة
+         * التقدمية قد تُطلَق بعد الحسم مباشرة بينما التخطيط النشط لم يُسجَّل بعد */
+        try {
+          hardenViewInstance(
+            (manager as unknown as { curView?: unknown }).curView
+          );
+        } catch {
+          /* curView غير متاح بعد — التحصين الاحتياطي في getViewFull يكفي */
+        }
         /* الطبقات: قائمة حية تتحدث مع أي تغيير */
         const doc = manager.curDocument;
         const refresh = () => {
