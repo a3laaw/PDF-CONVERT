@@ -87,7 +87,7 @@ cd /home/z/my-project
 mkdir -p $S
 $B set viewport 1440 900 >/dev/null
 $B open http://localhost:3000 >/dev/null 2>&1
-$B cookies set mahatta-locale ar >/dev/null 2>&1
+$B eval "(() => { localStorage.setItem('mahatta-locale', 'ar'); return 'ar-set'; })()" >/dev/null 2>&1  # الكوكي ميت — الكشف يقرأ localStorage فقط (i18n/core.ts)
 $B reload >/dev/null 2>&1
 warmup
 $B console --clear >/dev/null 2>&1

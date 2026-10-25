@@ -109,10 +109,13 @@ const R_LABEL = 158;
 const SEG = 360 / WHEEL_SERVICES.length; // 60° لكل قسم
 const GAP = 1.6; // فجوة بين القطاعات
 
-/** إحداثيات قطبية — 0° أعلى منتصفًا والاتجاه مع عقارب الساعة */
+/** إحداثيات قطبية — 0° أعلى منتصفًا والاتجاه مع عقارب الساعة
+    التقريب لمنزلتين إلزامي: نتائج trig تختلف بفروق 1e-13 بين محرّك السيرفر ومحرّك المتصفح
+    فترفض React مطابقة HTML المُسرَّد بالترطيب (خطأ hydration) — التقريب يوحّد الرقمين نهائيًا */
 function polar(r: number, deg: number) {
   const a = ((deg - 90) * Math.PI) / 180;
-  return { x: CX + r * Math.cos(a), y: CY + r * Math.sin(a) };
+  const q = (n: number) => Math.round(n * 100) / 100;
+  return { x: q(CX + r * Math.cos(a)), y: q(CY + r * Math.sin(a)) };
 }
 
 /** مسار قطاع حلقي من زاويتين — يُستخدم للـ SVG ولـ clip-path معًا */

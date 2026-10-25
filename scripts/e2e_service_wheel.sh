@@ -13,7 +13,7 @@
 # (11) الجوال 390px: العجلة تختفي وتظهر شبكة 6 بطاقات + بطاقة صور ← قبول image/*
 # (12) لقطة سطح مكتب أثناء التحويم + لقطة الجوال
 # (13) الكونسول: خطأ hydration واحد معروف سابقًا (خط أساس موثق) — لا أخطاء جديدة
-# دروس مثبتة: mahatta-locale=ar · النقر عبر eval .click() · الأرقام لاتينية
+# دروس مثبتة: اللغة تُبذر في localStorage (الكوكي ميت — الكشف يقرأ localStorage فقط) · النقر عبر eval .click() · الأرقام لاتينية
 # لقطات wheel_01+
 B="agent-browser"
 S=/home/z/my-project/screenshots
@@ -78,13 +78,14 @@ mkdir -p $S
 
 echo "═══ فتح الصفحة ═══"
 $B open http://localhost:3000 >/dev/null 2>&1
-$B cookies set mahatta-locale ar >/dev/null 2>&1
+# بذر اللغة في localStorage — الكوكي لا يقرأه detectLocale إطلاقًا (i18n/core.ts)
+$B eval "(() => { localStorage.setItem('mahatta-locale', 'ar'); return 'ar-set'; })()" >/dev/null 2>&1
 $B reload >/dev/null 2>&1
 sleep 5
 warmup
 $B console --clear >/dev/null 2>&1
 $B errors --clear >/dev/null 2>&1
-$B viewport 1440 900 >/dev/null 2>&1 || true
+$B set viewport 1440 900 >/dev/null 2>&1 || true
 $B reload >/dev/null 2>&1
 sleep 4
 
@@ -190,12 +191,11 @@ sleep 0.8
 $B screenshot $S/wheel_04_final.png >/dev/null 2>&1
 
 echo "═══ 13) الكونسول ═══"
-# الخط الأساسي الموثق: خطأ hydration واحد لكل تحميل (كشف اللغة القائم سلفًا)
+# hydration = 0 منذ Task 50: إحداثيات polar() مقرّبة لمنزلتين فصار الترطيب متطابقًا
 # + ضجيج PARSE من محرك CAD الداخلي عند فتح DWG (العارض يفتح سليمًا — سلوك موثق بالمهام 42-43)
 HYD=$($B console 2>&1 | grep -c "hydrat")
 ERRS=$($B console 2>&1 | awk '/^\[(error|critical)\]/ {print}' | grep -vc -e "hydrat" -e "conversion stage" || true)
-# كل تحميل في الجلسة يولّد خطأ hydration المعروف الواحد (الخط الأساسي) — 6 بدايات باردة ≈ 6-10
-if [ "$ERRS" = "0" ] && [ "$HYD" -le 12 ]; then ck "OK console clean (hydration per-load baseline=$HYD, PARSE noise filtered)"; else ck "FAIL console errors=$ERRS hydration=$HYD"; fi
+if [ "$ERRS" = "0" ] && [ "$HYD" = "0" ]; then ck "OK console clean (hydration=$HYD — الإصلاح النهائي، PARSE noise filtered)"; else ck "FAIL console errors=$ERRS hydration=$HYD"; fi
 
 echo ""
 echo "════════════════════════════"
