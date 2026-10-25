@@ -5,6 +5,14 @@
    النتيجة تقريبية بطبيعتها — نوضح ذلك للمستخدم دائمًا */
 
 import type { EngineInput } from "./pdf-engine";
+import {
+  hasArabic,
+  fixArabicWordOrder,
+  orderLineWords,
+  isRtlLine,
+} from "./arabic-text";
+
+export { hasArabic };
 
 /* ─────────── النموذج ─────────── */
 
@@ -30,9 +38,6 @@ export interface OfficeDoc {
   pages: OfficePage[];
   medianSize: number;
 }
-
-const RTL_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
-export const hasArabic = (s: string) => RTL_RE.test(s);
 
 function median(nums: number[]): number {
   if (!nums.length) return 12;
@@ -81,7 +86,8 @@ async function linesFromTextPdf(input: EngineInput): Promise<OfficePage[]> {
       if (!it.str || !it.str.trim()) continue;
       const t = it.transform;
       const sizePt = Math.hypot(t[2], t[3]) || Math.hypot(t[0], t[1]) || 12;
-      raw.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, sizePt });
+      /* NFKC: أشكال العرض العربية ‎(FB50–FEFF)‎ ترجع لحروفها الأساسية */
+      raw.push({ str: it.str.normalize("NFKC"), x: t[4], y: t[5], w: it.width || 0, sizePt });
     }
     /* تجميع: نفس السطر لو مركز العنصر قريب من مركز السطر الجاري (نصف حجم الخط) */
     raw.sort((a, b) => b.y - a.y || a.x - b.x);
@@ -154,7 +160,7 @@ async function linesFromOcr(
             const words = (line.words ?? [])
               .filter((w) => w.text && w.text.trim())
               .map((w) => ({
-                str: w.text,
+                str: w.text.normalize("NFKC"),
                 x: w.bbox.x0,
                 w: Math.max(1, w.bbox.x1 - w.bbox.x0),
                 yMid: (w.bbox.y0 + w.bbox.y1) / 2,
@@ -182,7 +188,8 @@ async function linesFromOcr(
       /* fallback: النص الخام إن ما ظهرت كلمات */
       if (!lines.length && data.text.trim()) {
         for (const row of data.text.split("\n")) {
-          if (row.trim()) lines.push({ page: pageNo, sizePt: 12, words: [{ str: row.trim(), x: 0, w: 1 }] });
+          if (row.trim())
+            lines.push({ page: pageNo, sizePt: 12, words: [{ str: row.trim().normalize("NFKC"), x: 0, w: 1 }] });
         }
       }
       pages.push({ no: pageNo, lines });
@@ -233,6 +240,22 @@ async function linesFromOcr(
   }
 }
 
+/** قرار المستند كله: إن كانت عناصر الاستخراج معكوسة (تخزين منطقي نادر) نقلبها مرة واحدة،
+    وإصلاح أثر اللام-ألف الهمزية يطبق دائمًا */
+function fixDocArabic(pages: OfficePage[]): OfficePage[] {
+  const all = pages.flatMap((p) => p.lines.flatMap((l) => l.words));
+  const { words: fixed } = fixArabicWordOrder(all);
+  if (fixed === all) return pages;
+  let k = 0;
+  return pages.map((p) => ({
+    ...p,
+    lines: p.lines.map((l) => ({
+      ...l,
+      words: l.words.map((w) => fixed[k++]),
+    })),
+  }));
+}
+
 /** نقطة الدخول: ملف PDF أو صورة → مستند سطور */
 export async function collectOfficeDoc(
   input: EngineInput,
@@ -240,21 +263,45 @@ export async function collectOfficeDoc(
   onProgress?: (m: string) => void
 ): Promise<OfficeDoc> {
   if (input.kind === "image") {
-    const pages = await linesFromOcr(input, lang, onProgress);
+    const pages = fixDocArabic(await linesFromOcr(input, lang, onProgress));
     const all = pages.flatMap((p) => p.lines);
     return { source: "ocr", pages, medianSize: median(all.map((l) => l.sizePt)) || 12 };
   }
   onProgress?.("فحص طبقة النص…");
   if (await pdfHasText(input)) {
     onProgress?.("استخراج النصوص بمواضعها…");
-    const pages = await linesFromTextPdf(input);
+    const pages = fixDocArabic(await linesFromTextPdf(input));
     const all = pages.flatMap((p) => p.lines);
     return { source: "text", pages, medianSize: median(all.map((l) => l.sizePt)) || 12 };
   }
   onProgress?.("الملف ممسوح ضوئيًا — جارٍ قراءة النص بالـOCR…");
-  const pages = await linesFromOcr(input, lang, onProgress);
+  const pages = fixDocArabic(await linesFromOcr(input, lang, onProgress));
   const all = pages.flatMap((p) => p.lines);
   return { source: "ocr", pages, medianSize: median(all.map((l) => l.sizePt)) || 12 };
+}
+
+/** نص سطر مرتب الاتجاه — يُستخدم في Word وExcel والنص الخام */
+export function orderedLineText(line: OfficeLine): { text: string; rtl: boolean } {
+  const rtl = isRtlLine(line.words.map((w) => w.str).join(" "));
+  const text = orderLineWords(line.words, rtl)
+    .map((w) => w.str)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { text, rtl };
+}
+
+/** صياغة المستند نصًا خامًا مرتب الاتجاه — تستعملها أداة استخراج النصوص */
+export function officeDocToText(doc: OfficeDoc): string {
+  return doc.pages
+    .map((p) => {
+      const body = p.lines
+        .map((l) => orderedLineText(l).text)
+        .filter((t) => t)
+        .join("\n");
+      return `── الصفحة ${p.no} ──\n${body}`;
+    })
+    .join("\n\n");
 }
 
 /* ─────────── 2) بناء Word ─────────── */
@@ -285,10 +332,14 @@ export async function buildDocx(doc: OfficeDoc, baseName: string): Promise<Blob>
     if (doc.pages.length > 1 && page.lines.length) {
       children.push(
         new Paragraph({
+          bidirectional: true,
           children: [
             new TextRun({
               text: `── الصفحة ${page.no} ──`,
+              rightToLeft: true,
+              boldComplexScript: true,
               bold: true,
+              sizeComplexScript: true,
               size: 18,
               color: "8A8A8A",
               font: "Arial",
@@ -298,13 +349,8 @@ export async function buildDocx(doc: OfficeDoc, baseName: string): Promise<Blob>
       );
     }
     for (const line of page.lines) {
-      const text = line.words
-        .map((w) => w.str)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
+      const { text, rtl } = orderedLineText(line);
       if (!text) continue;
-      const rtl = hasArabic(text);
       const isHeading = line.sizePt >= headingThreshold;
       children.push(
         new Paragraph({
@@ -317,6 +363,10 @@ export async function buildDocx(doc: OfficeDoc, baseName: string): Promise<Blob>
               text,
               rightToLeft: rtl,
               bold: isHeading,
+              /* النص العربي في Word يستخدم خصائص النص المركب (szCs/bCs) —
+                 بدونها يخرج العربي بحجم ووزن خاطئين مهما ضبطنا size/bold */
+              sizeComplexScript: true,
+              boldComplexScript: isHeading,
               size: Math.max(16, Math.round(line.sizePt * 2)),
               font: "Arial",
             }),
@@ -329,7 +379,7 @@ export async function buildDocx(doc: OfficeDoc, baseName: string): Promise<Blob>
   const d = new Document({
     styles: {
       default: {
-        document: { run: { font: "Arial", size: 24 } },
+        document: { run: { font: "Arial", size: 24, sizeComplexScript: true } },
       },
     },
     sections: [{ properties: {}, children: children.length ? children : [new Paragraph("")] }],
@@ -341,20 +391,28 @@ export async function buildDocx(doc: OfficeDoc, baseName: string): Promise<Blob>
 
 /* ─────────── 3) بناء Excel ─────────── */
 
-/** تقسيم سطر إلى خلايا: فجوة أفقية كبيرة = عمود جديد */
+/** تقسيم سطر إلى خلايا: فجوة أفقية كبيرة = عمود جديد — بترتيب قراءة السطر */
 function lineToCells(line: OfficeLine): string[] {
-  const words = line.words.slice().sort((a, b) => a.x - b.x);
+  const rtl = isRtlLine(line.words.map((w) => w.str).join(" "));
+  const words = orderLineWords(line.words, rtl);
   const cells: string[] = [];
   let cur = "";
-  let prevEnd: number | null = null;
+  let prev: (typeof words)[number] | null = null;
   const gapUnit = Math.max(line.sizePt * 0.8, 4);
   for (const w of words) {
-    if (prevEnd !== null && w.x - prevEnd > gapUnit) {
+    /* الفجوة تُقاس باتجاه القراءة: لاتيني ننظر يمين الكلمة السابقة، عربي ننظر يسارها */
+    const gap =
+      prev === null
+        ? 0
+        : rtl
+          ? prev.x - (w.x + w.w)
+          : w.x - (prev.x + prev.w);
+    if (prev !== null && gap > gapUnit) {
       cells.push(cur.trim());
       cur = "";
     }
     cur += (cur && !cur.endsWith(" ") ? " " : "") + w.str;
-    prevEnd = w.x + w.w;
+    prev = w;
   }
   if (cur.trim()) cells.push(cur.trim());
   return cells.length ? cells : [""];
@@ -369,7 +427,7 @@ export async function buildXlsx(doc: OfficeDoc, baseName: string): Promise<Blob>
       rows.push([`── الصفحة ${page.no} ──`]);
     }
     for (const line of page.lines) {
-      const text = line.words.map((w) => w.str).join(" ").trim();
+      const { text } = orderedLineText(line);
       if (!text) continue;
       rows.push(lineToCells(line));
     }

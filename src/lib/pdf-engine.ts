@@ -5,7 +5,7 @@ import { PDFDocument, PDFDict, PDFHexString, PDFName, PDFRawStream, PDFRef, PDFS
 import { toHindiDigits } from "./arabic";
 import { parsePageRanges } from "./interpreter";
 import { resultName, stripExt } from "./naming";
-import { collectOfficeDoc, buildDocx, buildXlsx } from "./to-office";
+import { collectOfficeDoc, buildDocx, buildXlsx, officeDocToText } from "./to-office";
 import { protectPdf, unlockPdf } from "./qpdf";
 import type { ResultFile } from "./types";
 
@@ -981,24 +981,14 @@ async function opPdfToImages(
 }
 
 /* استخراج النص */
-async function opExtractText(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {  const pdfjs = await getPdfjs();
+async function opExtractText(inputs: EngineInput[], label: string, ctx: RunContext): Promise<ResultFile[]> {
   const results: ResultFile[] = [];
   for (const input of inputs) {
     ctx.onProgress?.(`جارٍ استخراج نصوص «${input.name}»…`);
-    const bytes = await bytesOf(input);
-    const src = await pdfjs.getDocument({ data: bytes.slice() }).promise;
-    const chunks: string[] = [];
-    for (let i = 1; i <= src.numPages; i++) {
-      const page = await src.getPage(i);
-      const content = await page.getTextContent();
-      const line = content.items
-        .map((it) => ("str" in it ? it.str : ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      chunks.push(`── الصفحة ${toHindiDigits(i)} ──\n${line}`);
-    }
-    const text = chunks.join("\n\n");
+    /* نفس المسار الذكي لتحويل Word/Excel: نص حقيقي بمواضعه وترتيب اتجاهي سليم،
+       وإن كان الملف ممسوح ضوئيًا فُقرأ بالـOCR تلقائيًا */
+    const doc = await collectOfficeDoc(input, "ara+eng", (m) => ctx.onProgress?.(m));
+    const text = officeDocToText(doc);
     const blob = new Blob(["\ufeff" + text], { type: "text/plain;charset=utf-8" });
     results.push(resultFile(resultName("extract_text", input.name), blob, label, "other"));
   }
