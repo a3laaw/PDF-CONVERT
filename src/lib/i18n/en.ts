@@ -263,6 +263,8 @@ export const en: Record<string, string> = {
   "cad.openFailTitle": "We couldn't open the file",
   "cad.unexpected": "Something unexpected went wrong",
   "cad.wheelHint": "Mouse wheel = zoom · drag = pan",
+  "cad.pan": "Pan hand",
+  "cad.panHint": "Drag the sheet with the mouse (hand cursor) · mouse wheel to zoom",
   "cad.privacy": "DWG/DXF is read inside your browser — fully private and 100% free",
   "cad.pdfNote": "“Export PDF” gives you a vector file you can print at any size",
   "cad.exportToast": "Your PDF is ready and downloading",

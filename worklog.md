@@ -861,3 +861,23 @@ Work Log:
 Stage Summary:
 - فشل فتح ملفات DWG الحقيقية المعقدة لم يعد طريقًا مسدودًا: بعد فشل مسار العامل بالكامل يجرب المتصفح تلقائيًا تحويلًا إسعافيًا داخليًا DWG→DXF بكاتب WASM الأصلي (يتخطى طبقات الانهيار) ثم يفتح الناتج عبر مسار dxf-json المستقل — أتمتة كاملة للحل اليدوي الذي كنا نوصي به. ومع كل فشل (DWG أو DXF) يستطيع المستخدم نسخ تقرير تشخيصي صغير يكشف لنا صنف الانهيار بدقة دون رفع الملف — حلقة تشخيص مغلقة للملفات التي لا نملكها.
 - الملفات: cad-viewer.tsx (cadDwgToDxf + hook__cadDwgToDxf + attemptOpen باسم قابل للتغيير + ربط المسار الإسعافي + diagRef + زر cad-copy-report مع النسخ المتزامن أولًا + hook__cadLastReport) وi18n×3 (dxfFallback/copyReport/reportCopied + تحديث openFailDwg) وe2e_cad_dxf_fallback.sh جديد وgarbage_random.dxf/broken_text.dxf جديدان؛ لقطات 118–122.
+
+---
+Task ID: 45
+Agent: Main Agent (Z.ai)
+Task: طلب المستخدم بعد فتح ملف الـ10 رسومات بنجاح — «تغير للماوس يخليه يحسب الصفحة يمين ويسار اللي هيا علامة الإيد لأن الزوم والأوت بيخلي التحرك صعب» — وضع «يد التحريك» (Pan Hand) + إجابة سؤال إشعارات الخطوط.
+
+Work Log:
+- **إجابة سؤال الخطوط (بلا كود)**: إشعارات «Font Not Found / Missing Fonts» معلوماتية لا خطأ — الرسمة تشير لخطوط أوتوكاد تجارية (swissck/arialbd/GOTHIC…) لا تملكها المكتبة فتعوضها ببديل، والهندسة سليمة 100% والفرق شكل النصوص فقط.
+- **أساس المكتبة مكتشف بالفحص**: AcEdViewMode وضعان جاهزان — SELECTION (افتراضي: شمال=تحديد، أوسط=تحريك، عجلة=زوم) وPAN (شمال=تحريك) عبر AcTrLayoutView.mode الذي يعيد ضبط OrbitControls.mouseButtons؛ وAcEdCorsorType.Grab مؤشر إيد جاهز؛ وAcTrView2d.mode مُعادِل يوكّل لـactiveLayoutView؛ وacdbHostApplicationServices().layoutManager.events.layoutSwitched حدث تبديل التخطيطات من data-model.
+- **خلل مكتبة مُعالج**: التبديل لوضع PAN يسقط MIDDLE من mouseButtons ({LEFT:PAN} فقط) فيفقد الزر الأوسط تحريكه — applyCadViewMode يعيد ضبطه يدويًا {LEFT:2, MIDDLE:2} بقيمة THREE.MOUSE.PAN الثابتة (2) دون استيراد three (غير معتمد مباشرة).
+- **التنفيذ في cad-viewer.tsx**: حالة panMode=true افتراضيًا (المشاهدة سحب ورقة لا تحديد عناصر) + panModeRef متزامن للمعالِجات الخارجية + applyCadViewMode مستوى وحدة (يضبط mode + mouseButtons + setCursor Grab/Crosshair محصّنًا كله) + togglePan + زر شريط بنفسجي بأيقونة Hand (data-testid=cad-pan-btn aria-pressed) + فرع panMode في التلميح السفلي قبل wheelHint.
+- **الربط بدورة الفتح**: بعد نجاح الفتح — applyCadViewMode فوري + إعادة تأكيد بعد 600ms (سباق الملاءمة التقدمية مع تسجيل التخطيط النشط) + اشتراك layoutSwitched يعيد تطبيق وضع اليد على كل تخطيط يُفتح أول مرة (كل AcTrLayoutView جديد يبدأ SELECTION — ملفات متعددة الرسومات) مع فاكِ تنظيف panLayoutUnsubRef في تنظيف التأثير (الخدمة وحيدة عبر الجلسة فلا يجوز تراكم مستمعين).
+- **درس E2E محفوظ**: agent-browser `find data-testid <id> click` لا ينقر الأزرار هنا (فشل صامت) — النقر عبر eval querySelector(.click()) — click_pan_btn في السكربت.
+- **E2E scripts/e2e_cad_pan_mode.sh — 17/17 ✓ (لقطات 123–126)**: الزر موجود مفعّل افتراضيًا، mode=PAN(1) فعليًا، التلميح «اسحب الورقة» ظاهر، سحب شمال يحرّك الورقة (إزاحة 2,398,073 وحدة عالم)، أوسط يحرّك (1,194,269 وحدة)، مؤشر grab يتغير عند الإيقاف، الإيقاف → SELECTION والسحب لا يحرك (إزاحة 0.000)، إعادة التفعيل تعيد PAN، القياس يعمل فوق وضع اليد (2,446,421 وحدة)، تحديد منطقة + تصدير PDF سليم (5595B)، كونسول نظيف عبر الجلسة.
+- **انحدارات**: e2e_cad_console_fix.sh **18/18 ✓**، e2e_dwg_open_robust.sh **9/10 = الخط الأساسي الموثق** (الملف المقطوع يُفتح جزئيًا بسلوك المحرك المتسامح).
+- tsc: صفر أخطاء src/ · eslint: نظيف · فحص أمني: لا أسرار.
+
+Stage Summary:
+- «علامة الايد» أصبحت السلوك الافتراضي للعارض: سحب بالزر الشمال يحرّك الورقة يمين/يسار/فوق/تحت فور فتح أي ملف، الزر الأوسط يظل تحريكًا، العجلة زوم كعرف أوتوكاد، والتبديل لوضع التحديد (الصليب) بضغطة واحدة — مع إعادة تطبيق تلقائي على كل تخطيط في الملفات متعددة الرسومات، وقياس/تحديد منطقة/تصدير يعملون كلهم فوق الوضع دون تعارض لأن طبقاتهم الفوقية تلتقط المؤشر.
+- الملفات: cad-viewer.tsx (THREE_MOUSE_PAN + applyCadViewMode + panMode/panModeRef/panLayoutUnsubRef + togglePan + زر الشريط + فرع التلميح + ربط الفتح والتنظيف) وi18n×3 (cad.pan/cad.panHint) وe2e_cad_pan_mode.sh جديد؛ لقطات 123–126.

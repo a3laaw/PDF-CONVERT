@@ -22,6 +22,7 @@ import {
   Printer,
   Ruler,
   Crop,
+  Hand,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useI18n } from "@/lib/i18n";
@@ -638,6 +639,54 @@ function hardenViewInstance(view: unknown): void {
   }
 }
 
+/* ── وضع «يد التحريك» — القلب بين وضعَي الماوس ──
+ * PAN: الزر الشمال يسحب الورقة كأنك ماسكها بإيد (علامة الايد) — SELECTION: مربع تحديد وصليب.
+ * المكتبة تدعم الوضعين جاهزين (AcEdViewMode) لكنها تسقط الزر الأوسط عند التبديل لوضع اليد —
+ * نُعيده يدويًا عبر mouseButtons بقيم THREE.MOUSE (PAN=2) كي يظل تحريكًا في الوضعين.
+ * المؤشر: Grab = علامة إيد، Crosshair = صليب الدقة. كل شيء محصّن بتجربة/تقاطع —
+ * العارض غير الجاهز يُهمل والزر يعيد المحاولة، وحارس mode من المهمة 43 يحمي الكتابة عند غياب التخطيط */
+const THREE_MOUSE_PAN = 2; /* THREE.MOUSE.PAN — ثابت مستقر في three */
+
+async function applyCadViewMode(
+  on: boolean,
+  manager: unknown
+): Promise<void> {
+  try {
+    const view = (
+      manager as { curView?: Record<string, unknown> } | null | undefined
+    )?.curView;
+    if (!view) return;
+    const simple = await import("@mlightcad/cad-simple-viewer");
+    const v = view as {
+      mode?: unknown;
+      activeLayoutView?: {
+        _cameraControls?: {
+          mouseButtons?: Record<string, number>;
+          update?: () => void;
+        } | null;
+      } | null;
+      setCursor?: (c: unknown) => void;
+    };
+    v.mode = on ? simple.AcEdViewMode.PAN : simple.AcEdViewMode.SELECTION;
+    if (on) {
+      const controls = v.activeLayoutView?._cameraControls;
+      if (controls) {
+        /* الزر الشمال والأوسط كلاهما تحريك — المكتبة تسقط الأوسط في وضع اليد */
+        controls.mouseButtons = {
+          LEFT: THREE_MOUSE_PAN,
+          MIDDLE: THREE_MOUSE_PAN,
+        };
+        controls.update?.();
+      }
+    }
+    v.setCursor?.(
+      on ? simple.AcEdCorsorType.Grab : simple.AcEdCorsorType.Crosshair
+    );
+  } catch {
+    /* العارض غير جاهز بعد — يُعاد التطبيق عند تبديل التخطيط أو النقر على الزر */
+  }
+}
+
 export function CadViewer({ fileName, file, onClose }: Props) {
   const { t } = useI18n();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -672,6 +721,14 @@ export function CadViewer({ fileName, file, onClose }: Props) {
   const selPtrsRef = useRef<Map<number, Pt>>(new Map());
   const selPinchRef = useRef<{ d: number; cx: number; cy: number } | null>(null);
   const selPinchedRef = useRef(false);
+
+  /* ── وضع «يد التحريك» — مفعّل افتراضيًا: المشاهدة سحب ورقة لا تحديد عناصر ──
+   * المرجع المتزامن للمعالِجات (تبديل التخطيطات يقرؤه خارج دورة التصيير) */
+  const [panMode, setPanMode] = useState(true);
+  const panModeRef = useRef(true);
+  panModeRef.current = panMode;
+  /* فاكِ تنظيف اشتراك تبديل التخطيطات — الخدمة وحيدة عبر الجلسة فلا يجوز تراكم المستمعين */
+  const panLayoutUnsubRef = useRef<(() => void) | null>(null);
 
   const isDwg = /\.dwg$/i.test(file.name);
   /* عدّاد إعادة فتح يدوي — زر «أعد المحاولة» في حوار الخطأ يعيد تشغيل دورة الفتح كاملة */
@@ -953,6 +1010,30 @@ export function CadViewer({ fileName, file, onClose }: Props) {
         } catch {
           /* curView غير متاح بعد — التحصين الاحتياطي في getViewFull يكفي */
         }
+        /* وضع اليد الافتراضي بعد فتح ناجح — سحب الورقة متاح فورًا بلا نقرات.
+         * مع إعادة قصيرة: الملاءمة التقدمية قد تكون لسه بتسجّل التخطيط النشط */
+        await applyCadViewMode(panModeRef.current, manager);
+        window.setTimeout(() => {
+          if (alive) void applyCadViewMode(panModeRef.current, manager);
+        }, 600);
+        /* اشتراك تبديل التخطيطات — كل تخطيط جديد يبدأ بوضع التحديد افتراضيًا
+         * فنعيد حالة الزر فورًا (ملفات متعددة الرسومات مثل ملف الـ10 رسومات).
+         * المستمع يُزال في تنظيف التأثير — الخدمة وحيدة عبر الجلسة فلا تراكم */
+        try {
+          const { acdbHostApplicationServices } = await import(
+            "@mlightcad/data-model"
+          );
+          const lm = acdbHostApplicationServices().layoutManager;
+          const onSwitch = () => {
+            if (!alive) return;
+            void applyCadViewMode(panModeRef.current, manager);
+          };
+          lm.events.layoutSwitched.addEventListener(onSwitch);
+          panLayoutUnsubRef.current = () =>
+            lm.events.layoutSwitched.removeEventListener(onSwitch);
+        } catch {
+          /* الخدمة غير متاحة — التطبيق اليدوي من الزر يكفي */
+        }
         /* الطبقات: قائمة حية تتحدث مع أي تغيير */
         const doc = manager.curDocument;
         const refresh = () => {
@@ -1000,6 +1081,14 @@ export function CadViewer({ fileName, file, onClose }: Props) {
     })();
     return () => {
       alive = false;
+      /* إزالة مستمع تبديل التخطيطات — الخدمة وحيدة فما كان الإبقاء عليه
+       * سيكدّس مستمعين عبر عمليات الفتح المتكررة ويستدعي عارضات ميتة */
+      try {
+        panLayoutUnsubRef.current?.();
+      } catch {
+        /* لا اشتراك قائم */
+      }
+      panLayoutUnsubRef.current = null;
     };
   }, [file, openTick]);
 
@@ -1197,6 +1286,16 @@ export function CadViewer({ fileName, file, onClose }: Props) {
       setSelDrag(null);
       setSelectMode(true);
     }
+  };
+
+  /* ── زر «يد التحريك» — تبديل فوري بين سحب الورقة ومربع التحديد.
+   * القراءة من الحالة مباشرة (النقر يحدث داخل دورة التصيير) والتطبيق على
+   * العارض الحالي فورًا — وإن كان العارض غير جاهز فالتطبيق اللاحق آمن */
+  const togglePan = () => {
+    const next = !panMode;
+    setPanMode(next);
+    panModeRef.current = next;
+    void applyCadViewMode(next, mgrRef.current);
   };
 
   const clearMeasure = () => {
@@ -1643,7 +1742,9 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
                 ? t("cad.selectHint")
                 : measure
                   ? t("cad.measureHint")
-                  : t("cad.wheelHint")} · {t("ed.inBrowser")}
+                  : panMode
+                    ? t("cad.panHint")
+                    : t("cad.wheelHint")} · {t("ed.inBrowser")}
           </p>
         </div>
         <span className="flex-1" />
@@ -1673,6 +1774,24 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
             <Maximize className="size-4" aria-hidden />
           </button>
         </div>
+        {/* زر «يد التحريك» — سحب الورقة بالزر الشمال (علامة الايد) — مفعّل افتراضيًا */}
+        <button
+          onClick={togglePan}
+          aria-label={t("cad.pan")}
+          aria-pressed={panMode}
+          data-testid="cad-pan-btn"
+          title={t("cad.pan")}
+          disabled={!!error}
+          className={cn(
+            "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition disabled:opacity-40",
+            panMode
+              ? "bg-violet-500 text-slate-950 shadow-md shadow-violet-500/25"
+              : "border border-white/15 bg-white/5 text-slate-300 hover:text-white"
+          )}
+        >
+          <Hand className="size-4" aria-hidden />
+          <span className="hidden sm:inline">{t("cad.pan")}</span>
+        </button>
         {/* زر وضع القياس */}
         <button
           onClick={toggleMeasure}
