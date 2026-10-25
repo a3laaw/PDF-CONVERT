@@ -1,6 +1,18 @@
 import type { ToolDef, OpId } from "./types";
 
-/** كتالوج أدوات «محطّة PDF» — 17 أداة بلغة السوق */
+/* تقسيم iLovePDF المعتمد — المجموعات الوظيفية الست للشبكة المصنفة والبالِيتة
+   تنظيم · تحسين · تحويل · تعديل · حماية · معلومات */
+export const TOOL_GROUPS = [
+  { id: "organize", ar: "تنظيم" },
+  { id: "optimize", ar: "تحسين" },
+  { id: "convert", ar: "تحويل" },
+  { id: "edit", ar: "تعديل" },
+  { id: "protect", ar: "حماية" },
+  { id: "info", ar: "معلومات" },
+] as const;
+export type ToolGroup = (typeof TOOL_GROUPS)[number]["id"];
+
+/** كتالوج أدوات «محطّة PDF» — 25 أداة بلغة السوق */
 export const TOOLS: ToolDef[] = [
   {
     id: "merge",
@@ -29,7 +41,7 @@ export const TOOLS: ToolDef[] = [
     id: "compress",
     name: "تصغير الحجم",
     desc: "قلّل حجم الملف أو الصورة بثلاثة مستويات: خفيف، متوسط، قوي",
-    category: "الحجم",
+    category: "تحسين",
     emoji: "🗜️",
     keywords: ["صغر الحجم", "صغر", "ضغط", "اضغط", "خفف الحجم", "اصغر", "حجم اقل", "اصغر الحجم", "قلل الحجم", "خفف", "صغر الصورة", "ضغط الصورة", "خفف الصورة"],
     accepts: ["pdf", "image"],
@@ -92,7 +104,7 @@ export const TOOLS: ToolDef[] = [
     id: "rotate",
     name: "تدوير",
     desc: "لفّ الصفحات أو الصور يمينًا أو يسارًا — واقلب الصور أفقيًا أو رأسيًا",
-    category: "تنظيم",
+    category: "تعديل",
     emoji: "🔄",
     keywords: ["دور", "لف", "اقلب", "مدور", "تدوير", "لف الصفحات", "دور الصفحات", "عدل اتجاه", "اقلب الصورة", "قلب الصورة", "دور الصورة", "مدور الصورة"],
     accepts: ["pdf", "image"],
@@ -166,7 +178,7 @@ export const TOOLS: ToolDef[] = [
     id: "watermark",
     name: "ختم على الصفحات",
     desc: "أضف علامة مائية نصية: مسودة، سري، أو أي كلمة تريدها",
-    category: "إضافات",
+    category: "تعديل",
     emoji: "🪣",
     keywords: ["ختم", "علامة مائية", "طابع", "اكتب على الملف", "ختم مسودة", "ختم سري", "وارتمارك"],
     accepts: ["pdf"],
@@ -196,7 +208,7 @@ export const TOOLS: ToolDef[] = [
     id: "remove_watermark",
     name: "حذف العلامة المائية",
     desc: "نظّف الملف من العلامات المائية النصية والطوابع والتعليقات — اكتب كلمات العلامة كما تظهر",
-    category: "إضافات",
+    category: "تعديل",
     emoji: "🧽",
     keywords: ["حذف العلامة المائية", "إزالة العلامة المائية", "شيل العلامة", "امسح الختم", "بدون علامة", "ووترمارك", "نضف الملف", "ازالة العلامه"],
     accepts: ["pdf"],
@@ -216,7 +228,7 @@ export const TOOLS: ToolDef[] = [
     id: "page_numbers",
     name: "ترقيم الصفحات",
     desc: "رقّم صفحاتك بأرقام لاتينية: أرقام فقط أو «صفحة 3 من 10»",
-    category: "إضافات",
+    category: "تعديل",
     emoji: "🔢",
     keywords: ["رقم", "ترقيم", "ارقام الصفحات", "رقمهم", "رقمهالهم", "صفحة رقم", "ترقيم الصفحات"],
     accepts: ["pdf"],
@@ -305,7 +317,7 @@ export const TOOLS: ToolDef[] = [
     id: "image_resize",
     name: "تغيير أبعاد الصورة",
     desc: "صغّر أو كبّر بالنسبة المئوية أو اضبط العرض بالبكسل — النسبة محفوظة",
-    category: "الحجم",
+    category: "تعديل",
     emoji: "📐",
     keywords: ["أبعاد", "مقاس", "أبعاد الصورة", "مقاس الصورة", "صغر مقاس", "كبر مقاس", "resize", "عرض الصورة"],
     accepts: ["image"],
@@ -325,7 +337,7 @@ export const TOOLS: ToolDef[] = [
     id: "image_crop",
     name: "قص وتنظيف",
     desc: "اسحب على الصفحة أو الصورة وحدد أي قطعة من الداخل: احفظها ملفًا لوحدها أو امسحها نهائي — كتابة الايد والطوابع تروح زي الرسام",
-    category: "تنظيم",
+    category: "تعديل",
     emoji: "✂️",
     keywords: [
       "قص", "اقتصاص", "قص الصورة", "قطع الصورة", "مربع", "اقتص", "كروب",
@@ -375,7 +387,7 @@ export const TOOLS: ToolDef[] = [
     id: "extract_text",
     name: "استخراج النص",
     desc: "انسخ كل نصوص الملف في ملف نصي جاهز للتعديل",
-    category: "تحويل",
+    category: "معلومات",
     emoji: "📝",
     keywords: ["استخرج النص", "انسخ الكلام", "نص الملف", "طلع النص", "النصوص"],
     accepts: ["pdf"],
@@ -386,7 +398,7 @@ export const TOOLS: ToolDef[] = [
     id: "ocr",
     name: "نص من صورة أو مسح ضوئي",
     desc: "اقرأ النص المكتوب داخل الصور والملفات الممسوحة ضوئيًا — عربي وإنجليزي",
-    category: "تحويل",
+    category: "تحسين",
     emoji: "🔍",
     keywords: ["ocr", "مسح ضوئي", "ممسوح", "نص من صورة", "اقرا النص", "قراءة النص", "صورة مكتوبة"],
     accepts: ["pdf", "image"],
@@ -440,7 +452,7 @@ export const TOOLS: ToolDef[] = [
     id: "metadata",
     name: "بيانات الملف",
     desc: "عدّل العنوان والمؤلف والموضوع والكلمات المفتاحية، أو امسح كل البيانات بضغطة — خصوصية تامة",
-    category: "بيانات",
+    category: "معلومات",
     emoji: "ℹ️",
     keywords: [
       "بيانات الملف", "العنوان", "المؤلف", "خصائص", "ميتاداتا", "metadata",
@@ -469,7 +481,7 @@ export const TOOLS: ToolDef[] = [
     id: "sign",
     name: "التوقيع الإلكتروني",
     desc: "ارسم توقيعك بإيدك أو اكتبه، وانقر على الصفحة ليُثبّت مكانه وبالحجم الذي تريد",
-    category: "إضافات",
+    category: "حماية",
     emoji: "✍️",
     keywords: ["توقيع", "وقّع", "امضا", "امضاء", "توقيع الكتروني", "وقع الملف", "signature"],
     accepts: ["pdf"],
@@ -509,7 +521,7 @@ export const TOOLS: ToolDef[] = [
     id: "nup",
     name: "عدة صفحات في الورقة",
     desc: "اطبع بذكاء: صفحتان جنبًا إلى جنب في ورقة واحدة — توفير للورق",
-    category: "الحجم",
+    category: "تنظيم",
     emoji: "🧾",
     keywords: ["صفحتين في ورقة", "عدة صفحات في الورقة", "توفير الورق", "2 في 1", "n-up"],
     accepts: ["pdf"],
@@ -530,4 +542,4 @@ export const TOOLS_BY_ID: Record<OpId, ToolDef> = Object.fromEntries(
   TOOLS.map((t) => [t.id, t])
 ) as Record<OpId, ToolDef>;
 
-export const CATEGORIES = ["الكل", "تنظيم", "الحجم", "إضافات", "تحويل", "بيانات", "حماية"] as const;
+export const CATEGORIES = ["الكل", "تنظيم", "تحسين", "تحويل", "تعديل", "حماية", "معلومات"] as const;

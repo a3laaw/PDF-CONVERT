@@ -43,15 +43,33 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    /* تسجيل عامل الخدمة — فاشل بصمت إن لم يتوفر (بيئات تطوير قديمة) */
+    /* عامل الخدمة للإنتاج فقط — في التطوير يُزال ويُنظّف كاشه كي لا يخدم قشرة قديمة
+     * تبتلع تحديثات الكود (حادثة موثقة: SW خدّع جلسات E2E كاملة بنسخة مخزنة) */
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("/sw.js", { updateViaCache: "none" })
-        .then((reg) => {
-          /* فحص تحديث كل 30 ثانية — التحديث الجديد يسري بعد إعادة تحميل عادية */
-          setInterval(() => reg.update().catch(() => {}), 30_000);
-        })
-        .catch(() => {});
+      if (process.env.NODE_ENV === "production") {
+        navigator.serviceWorker
+          .register("/sw.js", { updateViaCache: "none" })
+          .then((reg) => {
+            /* فحص تحديث كل 30 ثانية — التحديث الجديد يسري بعد إعادة تحميل عادية */
+            setInterval(() => reg.update().catch(() => {}), 30_000);
+          })
+          .catch(() => {});
+      } else {
+        navigator.serviceWorker
+          .getRegistrations()
+          .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+          .catch(() => {});
+        try {
+          if (typeof caches !== "undefined") {
+            caches
+              .keys()
+              .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+              .catch(() => {});
+          }
+        } catch {
+          /* بيئة بلا Cache API — لا شيء يُنظّف */
+        }
+      }
     }
 
     const onBip = (e: Event) => {

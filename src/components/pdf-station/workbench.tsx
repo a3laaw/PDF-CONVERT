@@ -3,11 +3,24 @@
 /* شاشة العمل الجديدة — عرض الملف + شريط أدوات واحد، بدون أوامر نصية ولا شرح */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, FileOutput, LayoutGrid, Pencil, RotateCw, Trash2, X } from "lucide-react";
+import { Check, Copy, FileOutput, Home, LayoutGrid, Pencil, RotateCw, Trash2, X } from "lucide-react";
 import { useWorkspace } from "@/store/workspace";
 import { TOOLS_BY_ID } from "@/lib/tools-catalog";
 import { resultName } from "@/lib/naming";
 import { downloadBlob, openBlobInNewTab, pageQuickAction, pdfPageThumbs, readPdfMetadata } from "@/lib/pdf-engine";
+import { TOOL_ICONS } from "@/components/pdf-station/tool-icons";
+import { ToolsGrid } from "@/components/pdf-station/tools-grid";
+import { CompareStage, COMPARE_TOOLS } from "@/components/pdf-station/compare-stage";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type { PdfMetaInfo } from "@/lib/pdf-engine";
 import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
 import { CadViewer } from "@/components/pdf-station/cad-viewer";
@@ -29,153 +42,6 @@ import type { FileKind, OpId, ResultFile } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/* ─────────── أيقونات الأدوات ─────────── */
-const svg = (paths: React.ReactNode) => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.8}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className="size-5"
-    aria-hidden
-  >
-    {paths}
-  </svg>
-);
-
-const TOOL_ICONS: Record<string, React.ReactNode> = {
-  editor: svg(
-    <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
-  ),
-  cad_viewer: svg(
-    <>
-      <path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3z" />
-      <path d="m14 17 3 3 4-4" />
-    </>
-  ),
-  compress: svg(<path d="M4 9h16M4 15h10M9 4l-4 5 4 5" />),
-  merge: svg(
-    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
-  ),
-  merge_pages: svg(
-    <>
-      <rect x="3" y="3" width="9" height="9" rx="2" />
-      <rect x="12" y="12" width="9" height="9" rx="2" />
-      <path d="M13.5 7.5h5M16 5v5" />
-    </>
-  ),
-  split: svg(
-    <>
-      <circle cx="7" cy="7" r="2.5" />
-      <circle cx="7" cy="17" r="2.5" />
-      <path d="M9 8.5 20 19M9 15.5 20 5" />
-    </>
-  ),
-  extract: svg(
-    <>
-      <rect x="4" y="3" width="16" height="18" rx="2" />
-      <path d="M8 8h8M8 12h8M8 16h5" />
-    </>
-  ),
-  delete: svg(
-    <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
-  ),
-  rotate: svg(<path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6" />),
-  reorder: svg(<path d="M8 6v12M8 6 5 9M8 6l3 3M16 18V6M16 18l-3-3M16 18l3-3" />),
-  page_numbers: svg(<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" />),
-  watermark: svg(
-    <>
-      <path d="M12 3s5 4.5 5 9a5 5 0 0 1-10 0c0-4.5 5-9 5-9Z" />
-      <path d="M5 21h14" />
-    </>
-  ),
-  remove_watermark: svg(
-    <>
-      <path d="m7 21-4.3-4.3a2.4 2.4 0 0 1 0-3.4l9.6-9.6a2.4 2.4 0 0 1 3.4 0l5.6 5.6a2.4 2.4 0 0 1 0 3.4L13 21" />
-      <path d="M22 21H7" />
-      <path d="m5 11 9 9" />
-    </>
-  ),
-  pdf_to_images: svg(
-    <>
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-4-4-8 8" />
-    </>
-  ),
-  images_to_pdf: svg(
-    <>
-      <rect x="3" y="5" width="18" height="14" rx="2" />
-      <path d="M3 15l4-4 4 4 5-6 5 6" />
-    </>
-  ),
-  image_convert: svg(
-    <>
-      <path d="M20 5H7l3 3M4 19h13l-3-3" />
-    </>
-  ),
-  image_resize: svg(
-    <>
-      <path d="M15 3h6v6M9 21H3v-6M21 3l-8 8M3 21l8-8" />
-    </>
-  ),
-  image_crop: svg(
-    <>
-      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
-      <path d="M18 22V8a2 2 0 0 0-2-2H2" />
-    </>
-  ),
-  extract_text: svg(
-    <>
-      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
-      <path d="M14 3v6h6M9 13h6M9 17h4" />
-    </>
-  ),
-  ocr: svg(
-    <>
-      <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
-      <circle cx="11.5" cy="11.5" r="3" />
-      <path d="m13.8 13.8 2.7 2.7" />
-    </>
-  ),
-  pdf_to_word: svg(
-    <>
-      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
-      <path d="M14 3v6h6" />
-      <path d="M8 13.5 9.5 17l1.5-3.5M12.5 17v-3.5l2 3.5 2-3.5V17" />
-    </>
-  ),
-  pdf_to_excel: svg(
-    <>
-      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
-      <path d="M14 3v6h6" />
-      <path d="m8.5 13.5 7 5M15.5 13.5l-7 5" />
-    </>
-  ),
-  sign: svg(
-    <>
-      <path d="M3 17c3 0 4.5-2.5 5.5-5 1-2.4 2-4 3-4s.8 2.2 0 4.5c-.9 2.6-.6 4.5 1.5 4.5s3.5-2 4-4.5" />
-      <path d="M17.5 4.5 19.5 2.5 21.5 4.5 19.5 6.5Z" />
-      <path d="M3 21h18" />
-    </>
-  ),
-  protect: svg(
-    <>
-      <rect x="4" y="11" width="16" height="10" rx="2" />
-      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-      <circle cx="12" cy="16" r="1.6" fill="currentColor" stroke="none" />
-    </>
-  ),
-  unlock: svg(
-    <>
-      <rect x="4" y="11" width="16" height="10" rx="2" />
-      <path d="M8 11V7a4 4 0 0 1 7.8-1.2" />
-      <circle cx="12" cy="16" r="1.6" fill="currentColor" stroke="none" />
-    </>
-  ),
-};
 
 const TOOLBAR: { id: OpId | "editor" | "cad_viewer"; label: string }[] = [
   { id: "editor", label: "تعديل" },
@@ -311,7 +177,15 @@ function extLabel(name: string): string {
 /* ─────────── شارة القسم النشط ─────────── */
 
 /** شارة «الغرفة المستقلة»: اسم القسم بلونه وأيقونته + تلميح الأدوات المفلترة + مخرج دائم للوضع العام */
-function SectorChip({ sector, onExit }: { sector: ServicePick; onExit: () => void }) {
+function SectorChip({
+  sector,
+  onExit,
+  onHome,
+}: {
+  sector: ServicePick;
+  onExit: () => void;
+  onHome: () => void;
+}) {
   const { t } = useI18n();
   const Icon = SVC_ICON[sector.id];
   const color = SVC_COLOR[sector.id];
@@ -332,6 +206,16 @@ function SectorChip({ sector, onExit }: { sector: ServicePick; onExit: () => voi
         <span className="block text-[11px] text-muted-foreground">{t("wheel.sectorOnly")}</span>
       </span>
       <span className="flex-1" />
+      <Button
+        variant="outline"
+        size="sm"
+        data-testid="sector-home"
+        onClick={onHome}
+        className="gap-1.5 font-bold"
+      >
+        <Home className="size-4" aria-hidden />
+        {t("home.back")}
+      </Button>
       <Button
         variant="outline"
         size="sm"
@@ -383,6 +267,10 @@ export function Workbench() {
      بلا قسم (دخول مباشر / ?op= / الزر العام) = الوضع العام: كل الأدوات كما كان */
   const [sector, setSector] = useState<ServicePick | null>(null);
   const [pendingSvc, setPendingSvc] = useState<ServicePick | null>(null);
+  /* شبكة الأدوات المصنفة: أداة اختير من الشبكة بلا ملفات — تُنشّط فور وصول أول ملف */
+  const [pendingTool, setPendingTool] = useState<OpId | "editor" | null>(null);
+  /* زر «الرجوع للعجلة»: جلسة نظيفة بتأكيد — يمسح كل الملفات والنتائج */
+  const [confirmClean, setConfirmClean] = useState(false);
   const acceptTypes = sector ? sector.accept : ".pdf,image/*";
   const inputRef = useRef<HTMLInputElement>(null);
   const thumbsReq = useRef<Set<string>>(new Set());
@@ -472,6 +360,28 @@ export function Workbench() {
     tool === "image_crop" &&
     (activeFile?.kind === "pdf" || activeFile?.kind === "image");
 
+  /* شاشة الوجهين «الأصل ↔ المعدّل»: تُستبدل بالمعاينة الثابتة للأدوات الست ذات المعاينة الحية */
+  const compareKind: "pdf" | "image" | null =
+    activeFile && (activeFile.kind === "pdf" || activeFile.kind === "image")
+      ? activeFile.kind === "pdf" &&
+          (tool === "rotate" || tool === "watermark" || tool === "page_numbers")
+        ? "pdf"
+        : activeFile.kind === "image" &&
+            (tool === "rotate" || tool === "image_resize" || tool === "image_convert")
+          ? "image"
+          : null
+      : null;
+  const compareMode =
+    !!compareKind &&
+    !!tool &&
+    COMPARE_TOOLS.has(tool) &&
+    !editing &&
+    !cadOpen &&
+    !splitMode &&
+    !mergePagesMode &&
+    !signMode &&
+    !cropMode;
+
   const pickTool = (id: OpId) => {
     setTool(id);
     const def: Record<string, string> = {};
@@ -513,6 +423,42 @@ export function Workbench() {
     }
   };
 
+  /* ─── زر «الرجوع للعجلة» — جلسة نظيفة بتأكيد (قرار المستخدم) ─── */
+  const cleanSession = () => {
+    for (const f of files) removeFile(f.id);
+    clearResults();
+    setTool(null);
+    setEditing(false);
+    setCadOpen(false);
+    setSector(null);
+    setActiveId(null);
+    setSelFiles(null);
+    setSelPages([]);
+    setConfirmClean(false);
+    toast.success(t("home.cleaned"));
+  };
+
+  /* ─── شبكة «كل الأدوات»: مدخل «أداة أولًا» نمط iLovePDF ───
+     بلا ملفات: منتقي عام + تنشيط تلقائي عند الوصول
+     مع ملفات: قفزة فورية للأداة داخل مساحة العمل */
+  const handleGridPick = (id: OpId | "editor") => {
+    if (files.length === 0) {
+      setSector(null);
+      setPendingTool(id);
+      openGenericPicker();
+      return;
+    }
+    setSector(null);
+    if (id === "editor") {
+      setTool(null);
+      setEditing(true);
+    } else {
+      setEditing(false);
+      pickTool(id);
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   /* رجوعنا للعجلة (لا ملفات)؟ القسم يُصفّر — الإدخال التالي يبدأ محايدًا */
   useEffect(() => {
     if (files.length === 0) setSector(null);
@@ -535,6 +481,20 @@ export function Workbench() {
       pickToolRef.current(svc.then.tool);
     }
   }, [pendingSvc, files.length]);
+
+  /* أداة مختارة من الشبكة المصنفة بلا ملفات — تُنشّط عند وصول أول ملف */
+  useEffect(() => {
+    if (!pendingTool || files.length === 0) return;
+    const id = pendingTool;
+    setPendingTool(null);
+    if (id === "editor") {
+      setTool(null);
+      setEditing(true);
+    } else {
+      setEditing(false);
+      pickToolRef.current(id);
+    }
+  }, [pendingTool, files.length]);
 
   /* بوابة الملفات الموحدة: بلا قسم = كل شيء — مع قسم = أنواع القسم فقط والمرفوض يترفض بتوست */
   const ingestFiles = (fs: File[]) => {
@@ -775,12 +735,45 @@ export function Workbench() {
       />
 
       {files.length === 0 ? (
-        /* ─── لا ملفات: العجلة السينمائية ─── */
-        <ServiceWheel dragOver={dragOver} onPick={handleServicePick} onGeneric={openGenericPicker} />
+        /* ─── لا ملفات: العجلة السينمائية + شبكة «كل الأدوات» المصنفة (نمط iLovePDF) ─── */
+        <>
+          <ServiceWheel dragOver={dragOver} onPick={handleServicePick} onGeneric={openGenericPicker} />
+          <ToolsGrid onPick={handleGridPick} />
+        </>
       ) : (
         <>
-          {/* ─── شارة القسم النشط: أدوات القسم فقط + مخرج دائم للوضع العام ─── */}
-          {sector && <SectorChip sector={sector} onExit={() => setSector(null)} />}
+          {/* ─── شارة القسم النشط: أدوات القسم فقط + الرجوع للعجلة + مخرج للوضع العام ─── */}
+          {sector ? (
+            <SectorChip
+              sector={sector}
+              onExit={() => setSector(null)}
+              onHome={() => setConfirmClean(true)}
+            />
+          ) : (
+            <div
+              className="mb-3 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-white p-2.5 shadow-sm"
+              data-testid="generic-bar"
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                <LayoutGrid className="size-4.5" aria-hidden />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-extrabold leading-tight">{t("home.generic")}</span>
+                <span className="block text-[11px] text-muted-foreground">{t("home.genericSub")}</span>
+              </span>
+              <span className="flex-1" />
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="home-wheel"
+                onClick={() => setConfirmClean(true)}
+                className="gap-1.5 font-bold"
+              >
+                <Home className="size-4" aria-hidden />
+                {t("home.back")}
+              </Button>
+            </div>
+          )}
 
           {/* ─── شريط الأدوات: أدوات القسم النشط فقط — بلا قسم كل الأدوات ─── */}
           <div className="flex flex-wrap gap-0.5 rounded-2xl border border-border bg-white p-1.5 shadow-sm">
@@ -1069,6 +1062,19 @@ export function Workbench() {
                   onPage={setPage}
                   onClose={() => setEditing(false)}
                   onSave={editorSave}
+                />
+              ) : compareMode && activeFile && compareKind && tool ? (
+                <CompareStage
+                  key={`${activeFile.id}-${page}-${tool}`}
+                  tool={tool}
+                  kind={compareKind}
+                  file={activeFile.file}
+                  page={page}
+                  pages={activeFile.pages ?? 1}
+                  params={params}
+                  busy={running}
+                  onExecute={execute}
+                  executeLabel={actionLabel(tool)}
                 />
               ) : (
                 <>
@@ -1404,6 +1410,33 @@ export function Workbench() {
           </div>
         </div>
       )}
+
+      {/* ─── ديالوج الجلسة النظيفة: «الرجوع للعجلة» يمسح كل شيء بعد تأكيد ─── */}
+      <AlertDialog open={confirmClean} onOpenChange={setConfirmClean}>
+        <AlertDialogContent data-testid="clean-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("home.cleanTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("home.cleanBody", { n: toHindiDigits(files.length) })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="clean-cancel" className="font-bold">
+              {t("home.cleanKeep")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="clean-confirm"
+              onClick={(e) => {
+                e.preventDefault();
+                cleanSession();
+              }}
+              className="bg-red-600 font-extrabold text-white hover:bg-red-700"
+            >
+              {t("home.cleanGo")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

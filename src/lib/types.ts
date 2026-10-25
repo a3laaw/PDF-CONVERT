@@ -61,7 +61,7 @@ export interface ToolDef {
   id: OpId;
   name: string;
   desc: string;
-  category: "تنظيم" | "الحجم" | "إضافات" | "تحويل" | "بيانات" | "حماية";
+  category: "تنظيم" | "تحسين" | "تحويل" | "تعديل" | "حماية" | "معلومات";
   emoji: string;
   keywords: string[]; // للبحث والتفسير الضبابي
   accepts: FileKind[]; // أنواع الملفات المقبولة
