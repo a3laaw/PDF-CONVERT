@@ -24,6 +24,7 @@ import {
 import type { PdfMetaInfo } from "@/lib/pdf-engine";
 import { EditorCanvas } from "@/components/pdf-station/editor-canvas";
 import { CadViewer } from "@/components/pdf-station/cad-viewer";
+import { SectorSubWheel } from "@/components/pdf-station/sector-sub-wheel";
 import { SplitPanel } from "@/components/pdf-station/split-panel";
 import { MergePagesPanel } from "@/components/pdf-station/merge-pages-panel";
 import { SignaturePanel } from "@/components/pdf-station/signature-panel";
@@ -235,6 +236,8 @@ export function Workbench() {
   const [dragOver, setDragOver] = useState(false);
   const [editing, setEditing] = useState(false);
   const [cadOpen, setCadOpen] = useState(false);
+  /* العجلة الفرعية: تظهر عند اختيار قسم متعدد الأدوات من العجلة الرئيسية — خدمات القسم فقط في قائمة دائرية */
+  const [subWheel, setSubWheel] = useState<ServicePick | null>(null);
   /* العجلة السينمائية: القسم النشط حالة ثابتة طول وجود الملفات — «غرفة مستقلة»
      امتدادات القسم فقط في المنتقي والسحب، وأدواته فقط في الشريط.
      بلا قسم (دخول مباشر / ?op= / الزر العام) = الوضع العام: كل الأدوات كما كان */
@@ -369,8 +372,18 @@ export function Workbench() {
     }
   };
 
-  /* العجلة السينمائية: اختيار قسم ← القبول والأدوات تتبع القسم فورًا — بلا قفز تلقائي لأي أداة (المحور 2) */
+  /* العجلة السينمائية: اختيار قسم متعدد الأدوات ← العجلة الفرعية (خدمات القسم في قائمة دائرية)
+     أوتوكاد والعجلة ذات الأداة الواحدة تتجاوزها — سلوكها المباشر موثق ومعتمد (العارض وظيفة الغرفة) */
   const handleServicePick = (svc: ServicePick) => {
+    if (svc.then?.cad || svc.tools.length <= 1) {
+      enterSector(svc);
+      return;
+    }
+    setSubWheel(svc);
+  };
+
+  /* دخول غرفة القسم: القبول والأدوات تتبع القسم فورًا — بلا قفز تلقائي لأي أداة (المحور 2) */
+  const enterSector = (svc: ServicePick) => {
     setSector(svc);
     setPendingSvc(svc);
     /* أداة مفتوحة لا تنتمي لقسم القسم الجديد؟ تُغلق — الشريط سيعرض أدوات القسم وحدها */
@@ -403,6 +416,36 @@ export function Workbench() {
       inputRef.current.accept = acceptForId(id);
       inputRef.current.click();
     }
+  };
+
+  /* ═══ معالجات العجلة الفرعية — كلها تُغلقها أولًا ═══ */
+  /* المحور (الرفع): دخول غرفة القسم + منتجق بامتدادات القسم فقط */
+  const subEnterRoom = () => {
+    const svc = subWheel;
+    if (!svc) return;
+    setSubWheel(null);
+    enterSector(svc);
+  };
+  /* أيقونة خدمة: القسم يضبط ثم منتجق مفلتر بنوع الأداة — بلا تنشيط تلقائي (المحور 2) */
+  const subToolPick = (id: SectorTool) => {
+    const svc = subWheel;
+    if (!svc) return;
+    setSubWheel(null);
+    setSector(svc);
+    setPendingSvc(svc);
+    if (tool && !svc.tools.includes(tool)) setTool(null);
+    if (id === "cad_viewer") {
+      /* لا يُبلَغ عمليًا — أوتوكاد يتجاوز العجلة الفرعية */
+      setCadOpen(true);
+      return;
+    }
+    if (files.length === 0) openKindPicker(id);
+    else activateTool(id);
+  };
+  /* «كل الأدوات»: الوضع العام بمنتجق بلا قسم */
+  const subGeneric = () => {
+    setSubWheel(null);
+    openGenericPicker();
   };
 
   /* ─── زر «الرجوع للعجلة» — جلسة نظيفة بتأكيد (قرار المستخدم) ─── */
@@ -453,6 +496,11 @@ export function Workbench() {
   /* رجوعنا للعجلة (لا ملفات)؟ القسم يُصفّر — الإدخال التالي يبدأ محايدًا */
   useEffect(() => {
     if (files.length === 0) setSector(null);
+  }, [files.length]);
+
+  /* العجلة الفرعية تغلق تلقائيًا لحظة وصول الملفات (مسار السحب والإفلات عبر المنتقي العام أيضًا) */
+  useEffect(() => {
+    if (files.length > 0) setSubWheel(null);
   }, [files.length]);
 
   useEffect(() => {
@@ -731,6 +779,17 @@ export function Workbench() {
           e.target.value = "";
         }}
       />
+
+      {/* ═══ العجلة الفرعية — قائمة دائرية بخدمات القسم المختار من العجلة الرئيسية ═══ */}
+      {subWheel && (
+        <SectorSubWheel
+          svc={subWheel}
+          onClose={() => setSubWheel(null)}
+          onEnterRoom={subEnterRoom}
+          onToolPick={subToolPick}
+          onGeneric={subGeneric}
+        />
+      )}
 
       {files.length === 0 ? (
         /* ─── لا ملفات: العجلة السينمائية + شبكة «كل الأدوات» المصنفة (نمط iLovePDF) ─── */

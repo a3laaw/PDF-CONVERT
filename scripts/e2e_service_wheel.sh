@@ -143,6 +143,8 @@ echo "═══ 7) قسم OCR ← بلا تنشيط تلقائي + فتح يدو
 $B reload >/dev/null 2>&1; sleep 3.5  # بداية باردة لكل خدمة — عزل الحالة ومحاكاة رحلة مستخدم حقيقي
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-ocr]').click(); return 'OK clicked ocr'; })()")"
 sleep 0.6
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية: الدخول من المحور
+sleep 0.3
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
 ck "$(no_auto)"
@@ -158,6 +160,8 @@ ck "$(remove_all)"
 $B reload >/dev/null 2>&1; sleep 3.5
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-office]').click(); return 'OK clicked office'; })()")"
 sleep 0.6
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية
+sleep 0.3
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
 ck "$(no_auto)"
@@ -203,6 +207,8 @@ ck "$(EV "(() => { const n = document.querySelectorAll('[data-testid^=wheel-card
 $B screenshot $S/wheel_03_mobile.png >/dev/null 2>&1
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-card-images]').click(); return 'OK clicked images card'; })()")"
 sleep 0.6
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية على الجوال
+sleep 0.3
 ACC3=$(seg_accept)
 if [ "$ACC3" = "image/*" ]; then ck "OK mobile accept=$ACC3"; else ck "FAIL mobile accept=$ACC3"; fi
 ck "$(inject crop_clean_me.png image/png)"

@@ -67,6 +67,7 @@ cd /home/z/my-project
 mkdir -p $S
 $B set viewport 1440 900 >/dev/null
 
+$B eval "(async () => { const regs = await navigator.serviceWorker.getRegistrations(); for (const r of regs) await r.unregister(); const keys = await caches.keys(); for (const k of keys) await caches.delete(k); return 'sw-clean'; })()" >/dev/null 2>&1  # حارس SW: الكاش القديم يحجب البناء الجديد (درس Task 51)
 echo "══ 0) لغة عربية ثابتة ══"
 $B open http://localhost:3000 >/dev/null
 $B wait --load networkidle >/dev/null

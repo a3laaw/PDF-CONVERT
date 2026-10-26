@@ -30,6 +30,11 @@ export const en: Record<string, string> = {
   "ws.chooseTool": "Pick a tool from the toolbar above to start — nothing opens automatically",
   "hub.aria": "All tools — click to show or hide",
   "hub.title": "All tools",
+  "sw.title": "{name} services",
+  "sw.pick": "Pick a service from the sub-wheel — or upload section files from the center",
+  "sw.upload": "Upload files",
+  "sw.all": "All tools (generic mode)",
+  "sw.close": "Close sub-wheel",
   "tools.editor.name": "Editor",
   "tools.editor.desc": "Edit text on pages and images right on the file — add, remove, and format",
   /* Back-to-wheel button + clean session */

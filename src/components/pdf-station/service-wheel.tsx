@@ -149,6 +149,29 @@ export const SVC_ICON: Record<ServicePick["id"], typeof FileText> = {
   edit: PenTool,
 };
 
+/* الاسم الثنائي: كل قطاع يعرض اسمه المحلي + الاسم باللغة الأخرى (عربي + إنجليزي)
+   قيم ثابتة مرايا لقيم wheel.svc.* في ar.ts/en.ts — بلا مفاتيح i18n إضافية */
+export const SVC_EN: Record<ServicePick["id"], string> = {
+  pdf: "PDF",
+  images: "Images",
+  cad: "AutoCAD",
+  office: "Office",
+  ocr: "OCR",
+  edit: "Sign & Edit",
+};
+export const SVC_AR: Record<ServicePick["id"], string> = {
+  pdf: "PDF",
+  images: "صور",
+  cad: "أوتوكاد",
+  office: "أوفيس",
+  ocr: "OCR ونصوص",
+  edit: "تعديل وتوقيع",
+};
+/** الاسم الثانوي للقطاع: عربي يُظهر الإنجليزية والعكس — الهندية تُظهر الإنجليزية */
+export function sectorSecondName(id: ServicePick["id"], locale: string): string {
+  return locale === "en" ? SVC_AR[id] : SVC_EN[id];
+}
+
 /* جزيئات الخلفية — إعدادات ثابتة (لا Math.random كي لا يختل الترطيب) */
 const PARTICLES = [
   { l: "6%", t: "18%", s: 5, d: "15s", dl: "0s" },
@@ -207,7 +230,7 @@ export function ServiceWheel({
   /** أيقونات مركز الترس (المحور 4): فتح أداة مباشرة — منتقي مفلتر بالنوع بلا ملفات */
   onToolPick?: (id: OpId | "editor") => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [hover, setHover] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   /* شريط الأيقونات المصغّرة — يفتح من مركز الترس (المحور 4) */
@@ -352,6 +375,13 @@ export function ServiceWheel({
                 <span className="text-[13px] font-extrabold text-foreground leading-none whitespace-nowrap">
                   {t(`wheel.svc.${s.id}`)}
                 </span>
+                <span
+                  className="text-[8.5px] font-bold text-muted-foreground leading-none whitespace-nowrap tracking-wide"
+                  dir="ltr"
+                  aria-hidden
+                >
+                  {sectorSecondName(s.id, locale)}
+                </span>
               </span>
             </button>
           );
@@ -395,7 +425,12 @@ export function ServiceWheel({
                 <Icon className="size-5" aria-hidden />
               </span>
               <span className="min-w-0">
-                <span className="block text-sm font-extrabold leading-tight">{t(`wheel.svc.${s.id}`)}</span>
+                <span className="flex items-baseline gap-1.5">
+                  <span className="text-sm font-extrabold leading-tight">{t(`wheel.svc.${s.id}`)}</span>
+                  <span className="text-[9px] font-bold text-muted-foreground leading-none" dir="ltr" aria-hidden>
+                    {sectorSecondName(s.id, locale)}
+                  </span>
+                </span>
                 <span className="block truncate text-[11px] text-muted-foreground">{t(`wheel.svc.${s.id}D`)}</span>
               </span>
             </button>

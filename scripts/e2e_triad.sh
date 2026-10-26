@@ -107,6 +107,8 @@ echo "═══ (B3) الرجوع من داخل قسم ═══"
 cold
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-pdf]')?.click(); return 'OK pdf picked'; })()")"
 sleep 0.8
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية: الدخول للمحور
+sleep 0.3
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
 ck "$(EV "(() => document.querySelector('[data-testid=sector-chip]')?.querySelector('[data-testid=sector-home]') ? 'OK sector home btn' : 'BAD')()")"

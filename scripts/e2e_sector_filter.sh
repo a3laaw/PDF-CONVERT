@@ -70,6 +70,10 @@ chip_state() {
 }
 pick_seg() {
   EV "(() => { const b = document.querySelector('[data-testid=wheel-seg-$1]'); if (!b) return 'NO-SEG'; b.click(); return 'OK picked $1'; })()"
+  sleep 0.6
+  # العجلة الفرعية: الأقسام متعددة الأدوات تفتحها — الدخول للغرفة من محورها (أوتوكاد/تعديل يتجاوزان بلا overlay)
+  EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null
+  sleep 0.3
 }
 
 cd /home/z/my-project
@@ -195,6 +199,8 @@ sleep 1.5
 $B reload >/dev/null 2>&1; sleep 4
 ck "$(EV "(() => { const b = document.querySelector('[data-testid=wheel-card-images]'); if (!b) return 'NO-CARD'; b.click(); return 'OK card clicked'; })()")"
 sleep 0.6
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية على الجوال كذلك
+sleep 0.3
 ck "$(inject crop_clean_me.png image/png)"
 sleep 3.5
 ck "$(chip_state)"

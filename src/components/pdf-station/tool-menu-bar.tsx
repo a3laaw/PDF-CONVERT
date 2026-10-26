@@ -28,7 +28,7 @@ export const MENU_GROUPS: { gid: ToolGroup; ids: (OpId | "editor")[] }[] = [
 ];
 
 /** اسم قصير للأداة: tb.* إن وُجد وإلا الاسم الكامل من الكتالوج (metadata/nup) */
-export function toolLabel(id: OpId | "editor", t: (k: string) => string): string {
+export function toolLabel(id: OpId | "editor" | "cad_viewer", t: (k: string) => string): string {
   const short = t(`tb.${id}`);
   if (short !== `tb.${id}`) return short;
   return t(toolKey(id, "name"));

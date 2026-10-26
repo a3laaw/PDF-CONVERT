@@ -136,6 +136,8 @@ ck "$(remove_all)"
 $B reload >/dev/null 2>&1; sleep 4
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-pdf]')?.click(); return 'OK pdf'; })()")"
 sleep 0.6
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية: الدخول من المحور
+sleep 0.3
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
 ck "$(no_auto)"
@@ -150,6 +152,8 @@ ck "$(remove_all)"
 $B reload >/dev/null 2>&1; sleep 4
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-images]')?.click(); return 'OK images'; })()")"
 sleep 0.6
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية
+sleep 0.3
 ck "$(inject crop_clean_me.png image/png)"
 sleep 3.5
 G=$(EV "(() => document.querySelectorAll('[data-testid^=mb-g-]').length)()")
@@ -166,6 +170,8 @@ ck "$(remove_all)"
 $B reload >/dev/null 2>&1; sleep 4
 ck "$(EV "(() => { document.querySelector('[data-testid=wheel-seg-office]')?.click(); return 'OK'; })()")"
 sleep 0.6
+EV "(() => { const s = document.querySelector('[data-testid=sw-enter]'); if (!s) return 'NO-SUB'; s.click(); return 'OK sub-enter'; })()" >/dev/null  # العجلة الفرعية
+sleep 0.3
 ck "$(inject crop_annot.pdf application/pdf)"
 sleep 3.5
 ck "$(no_auto)"

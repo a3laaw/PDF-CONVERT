@@ -34,6 +34,7 @@ OPEN_AND_WAIT="$B find role button click --name \"عارض أوتوكاد\" >/de
 cd /home/z/my-project
 $B set viewport 1440 900 >/dev/null
 
+$B eval "(async () => { const regs = await navigator.serviceWorker.getRegistrations(); for (const r of regs) await r.unregister(); const keys = await caches.keys(); for (const k of keys) await caches.delete(k); return 'sw-clean'; })()" >/dev/null 2>&1  # حارس SW: الكاش القديم يحجب البناء الجديد (درس Task 51)
 echo "══ 1) الستة إصدارات كلها تُفتح بعد التغييرات ══"
 for v in 2000 2004 2007 2010 2013 2018; do
   $B open http://localhost:3000 >/dev/null

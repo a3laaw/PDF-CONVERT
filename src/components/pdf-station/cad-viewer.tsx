@@ -331,9 +331,10 @@ function cadDwgToDxf(raw: ArrayBuffer): Promise<Uint8Array | null> {
   }
   return cadDwgToDxfFn(raw);
 }
-/* خطاف فحص للتطوير فقط — E2E يختبر المحرك الإسعافي في السياق الحقيقي
+/* خطاف فحص للاختبارات — متاح في الإنتاج كذلك كي يجري E2E على النسخة المنشورة نفسها
+   (Cloud Run) لا على التطوير وحدها — دالة تشخيصية بلا أسرار ولا معلومات حساسة
  * (يرفق على مستوى الوحدة ليظهر بمجرد تحميل العارض قبل أي فشل فعلي) */
-if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+if (typeof window !== "undefined") {
   (window as unknown as { __cadDwgToDxf?: DwgToDxfFn }).__cadDwgToDxf =
     (raw) => cadDwgToDxf(raw);
 }
@@ -1942,12 +1943,10 @@ img{max-width:100%;max-height:96vh;object-fit:contain}</style></head>
                         time: d?.at ?? new Date().toISOString(),
                       };
                       const text = JSON.stringify(report, null, 2);
-                      /* خطاف فحص للتطوير — E2E يتحقق من محتوى التقرير
-                       * (الحافظة نفسها مقيدة في المتصفح الآلي) */
-                      if (process.env.NODE_ENV !== "production") {
-                        (window as unknown as { __cadLastReport?: string })
-                          .__cadLastReport = text;
-                      }
+                      /* خطاف فحص للاختبارات — متاح في الإنتاج كذلك كي يجري E2E
+                       * على النسخة المنشورة (الحافظة نفسها مقيدة في المتصفح الآلي) */
+                      (window as unknown as { __cadLastReport?: string })
+                        .__cadLastReport = text;
                       /* النسخ المتزامن أولًا — داخل إيماءة النقر (execCommand
                        * يفشل بعد await لأن الإيماءة تنتهي)، والـAPI غير
                        * المتزامن احتياطًا للمتصفحات الحديثة */
